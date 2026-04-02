@@ -31,7 +31,7 @@ sub execute {
 			. 'facility varchar(255) NOT NULL, '
 			. 'host varchar(255) NOT NULL, '
 			. 'host_from varchar(255) NOT NULL, '
-			. 'pid bigint NOT NULL, '
+			. 'pid bigint, '
 			. 'priority varchar(64) NOT NULL, '
 			. 'program varchar(255) NOT NULL, '
 			. 'sourceip inet NOT NULL, '

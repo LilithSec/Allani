@@ -71,10 +71,13 @@ The following syslog-ng fields are required to be present.
     FACILITY
     HOST
     HOST_FROM
-    PID
     PRIORITY
     PROGRAM
     SOURCEIP
+
+The following are optional.
+
+    PID
 
 =cut
 
@@ -111,9 +114,6 @@ sub ingest_json_syslog {
 		}
 		if ( !defined( $json->{'HOST_FROM'} ) ) {
 			die('$json->{HOST_FROM} is undef');
-		}
-		if ( !defined( $json->{'PID'} ) ) {
-			die('$json->{PID} is undef');
 		}
 		if ( !defined( $json->{'PRIORITY'} ) ) {
 			die('$json->{PRIORITY} is undef');
