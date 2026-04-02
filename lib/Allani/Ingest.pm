@@ -3,7 +3,7 @@ package Allani::Ingest;
 use 5.006;
 use strict;
 use warnings;
-use JSON::XS;
+use JSON::XS ();
 
 =head1 NAME
 
@@ -88,22 +88,42 @@ sub ingest_json_syslog {
 	eval {
 		my $json = JSON::XS->new->utf8->decode($raw_json);
 
-		if (   ( !defined($json) )
-			|| ( ref($json) ne 'HASH' )
-			|| ( !defined( $json->{'C_ISODATE'} ) )
-			|| ( !defined( $json->{'R_ISODATE'} ) )
-			|| ( !defined( $json->{'S_ISODATE'} ) )
-			|| ( !defined( $json->{'FACILITY'} ) )
-			|| ( !defined( $json->{'HOST'} ) )
-			|| ( !defined( $json->{'HOST_FROM'} ) )
-			|| ( !defined( $json->{'PID'} ) )
-			|| ( !defined( $json->{'PRIORITY'} ) )
-			|| ( !defined( $json->{'PROGRAM'} ) )
-			|| ( !defined( $json->{'SOURCEIP'} ) ) )
-		{
-			die('missing a required field in the JSON, undef, or not a hash ref');
-			return 0;
-		} ## end if ( ( !defined($json) ) || ( ref($json) ne...))
+		if ( !defined($json) ) {
+			die('JSON parsing returned undef');
+		}
+		if ( ref($json) ne 'HASH' ) {
+			die( '$json hash ref is "' . ref($json) . '" and not "HASH"' );
+		}
+		if ( !defined( $json->{'C_ISODATE'} ) ) {
+			die('$json->{C_ISODATE} is undef');
+		}
+		if ( !defined( $json->{'R_ISODATE'} ) ) {
+			die('$json->{R_ISODATE} is undef');
+		}
+		if ( !defined( $json->{'S_ISODATE'} ) ) {
+			die('$json->{S_ISODATE} is undef');
+		}
+		if ( !defined( $json->{'FACILITY'} ) ) {
+			die('$json->{FACILITY} is undef');
+		}
+		if ( !defined( $json->{'HOST'} ) ) {
+			die('$json->{HOST} is undef');
+		}
+		if ( !defined( $json->{'HOST_FROM'} ) ) {
+			die('$json->{HOST_FROM} is undef');
+		}
+		if ( !defined( $json->{'PID'} ) ) {
+			die('$json->{PID} is undef');
+		}
+		if ( !defined( $json->{'PRIORITY'} ) ) {
+			die('$json->{PRIORITY} is undef');
+		}
+		if ( !defined( $json->{'PROGRAM'} ) ) {
+			die('$json->{PROGRAM} is undef');
+		}
+		if ( !defined( $json->{'SOURCEIP'} ) ) {
+			die('$json->{SOURCEIP} is undef');
+		}
 
 		$self->{'sth'}->execute(
 			$json->{'C_ISODATE'}, $json->{'R_ISODATE'}, $json->{'S_ISODATE'}, $json->{'FACILITY'},
