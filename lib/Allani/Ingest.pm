@@ -28,9 +28,12 @@ our $VERSION = '0.0.1';
 
 =head2 new
 
-
+Creates a new object.
 
     my $ingester = Allani::Ingest->new('dbh' => $dbh);
+
+    - dbh :: Database handle from DBI to use.
+        default :: undef
 
 =cut
 
@@ -56,6 +59,25 @@ sub new {
 	return $self;
 } ## end sub new
 
+=head2 ingest_json_syslog
+
+Ingests a log line.
+
+The following syslog-ng fields are required to be present.
+
+    C_ISODATE
+    R_ISODATE
+    S_ISODATE
+    FACILITY
+    HOST
+    HOST_FROM
+    PID
+    PRIORITY
+    PROGRAM
+    SOURCEIP
+
+=cut
+
 sub ingest_json_syslog {
 	my ( $self, $raw_json ) = @_;
 
@@ -66,29 +88,31 @@ sub ingest_json_syslog {
 	eval {
 		my $json = JSON::XS->new->utf8->decode($raw_json);
 
-		if (   ( !defined( $json->{'c_isodate'} ) )
-			|| ( !defined( $json->{'r_isodate'} ) )
-			|| ( !defined( $json->{'s_isodate'} ) )
-			|| ( !defined( $json->{'facility'} ) )
-			|| ( !defined( $json->{'host'} ) )
-			|| ( !defined( $json->{'host_from'} ) )
-			|| ( !defined( $json->{'pid'} ) )
-			|| ( !defined( $json->{'priority'} ) )
-			|| ( !defined( $json->{'program'} ) )
-			|| ( !defined( $json->{'sourceip'} ) )
-			|| ( !defined( $json->{'raw'} ) ) )
+		if (   ( !defined($json) )
+			|| ( ref($json) ne 'HASH' )
+			|| ( !defined( $json->{'C_ISODATE'} ) )
+			|| ( !defined( $json->{'R_ISODATE'} ) )
+			|| ( !defined( $json->{'S_ISODATE'} ) )
+			|| ( !defined( $json->{'FACILITY'} ) )
+			|| ( !defined( $json->{'HOST'} ) )
+			|| ( !defined( $json->{'HOST_FROM'} ) )
+			|| ( !defined( $json->{'PID'} ) )
+			|| ( !defined( $json->{'PRIORITY'} ) )
+			|| ( !defined( $json->{'PROGRAM'} ) )
+			|| ( !defined( $json->{'SOURCEIP'} ) ) )
 		{
+			die('missing a required field in the JSON, undef, or not a hash ref');
 			return 0;
-		} ## end if ( ( !defined( $json->{'c_isodate'} ) ) ...)
+		} ## end if ( ( !defined($json) ) || ( ref($json) ne...))
 
 		$self->{'sth'}->execute(
-			$json->{'c_isodate'}, $json->{'r_isodate'}, $json->{'s_isodate'}, $json->{'facility'},
-			$json->{'host'},      $json->{'host_from'}, $json->{'pid'},       $json->{'priority'},
-			$json->{'program'},   $json->{'sourceip'},  $json->{'raw'},
+			$json->{'C_ISODATE'}, $json->{'R_ISODATE'}, $json->{'S_ISODATE'}, $json->{'FACILITY'},
+			$json->{'HOST'},      $json->{'HOST_FROM'}, $json->{'PID'},       $json->{'PRIORITY'},
+			$json->{'PROGRAM'},   $json->{'SOURCEIP'},  $raw_json,
 		);
 	};
 	if ($@) {
-		return 0;
+		die($@);
 	}
 
 	return 1;

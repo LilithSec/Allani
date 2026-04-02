@@ -25,6 +25,9 @@ sub execute {
 
 	while ( !eof(STDIN) ) {
 		eval { $ingester->ingest_json_syslog( readline(STDIN) ); };
+		if ($@) {
+			warn($@);
+		}
 	}
 } ## end sub execute
 

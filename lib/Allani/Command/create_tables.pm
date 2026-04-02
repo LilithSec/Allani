@@ -25,17 +25,17 @@ sub execute {
 	my $sth
 		= $dbh->prepare( 'create table syslog ('
 			. 'id bigserial NOT NULL, '
-			. 'c_isodate TIMESTAMP WITH TIME ZONE, '
-			. 'r_isodate  TIMESTAMP WITH TIME ZONE, '
-			. 's_isodate  TIMESTAMP WITH TIME ZONE, '
-			. 'facility varchar(255), '
-			. 'host varchar(255), '
-			. 'host_from varchar(255), '
-			. 'pid bigint, '
-			. 'priority varchar(64), '
-			. 'program varchar(255), '
-			. 'sourceip inet, '
-			. 'raw jsonb, '
+			. 'c_isodate TIMESTAMP WITH TIME ZONE NOT NULL, '
+			. 'r_isodate  TIMESTAMP WITH TIME ZONE NOT NULL, '
+			. 's_isodate  TIMESTAMP WITH TIME ZONE NOT NULL, '
+			. 'facility varchar(255) NOT NULL, '
+			. 'host varchar(255) NOT NULL, '
+			. 'host_from varchar(255) NOT NULL, '
+			. 'pid bigint NOT NULL, '
+			. 'priority varchar(64) NOT NULL, '
+			. 'program varchar(255) NOT NULL, '
+			. 'sourceip inet NOT NULL, '
+			. 'raw jsonb NOT NULL, '
 			. 'PRIMARY KEY(id) );' );
 	$sth->execute();
 }
