@@ -23,8 +23,8 @@ sub execute {
 	my $dbh      = $self->{'app'}->connect_dbi;
 	my $ingester = Allani::Ingest->new( 'dbh' => $dbh );
 
-	while ( !eof(STDIN) ) {
-		eval { $ingester->ingest_json_syslog( readline(STDIN) ); };
+	while ( readline(STDIN) ) {
+		eval { $ingester->ingest_json_syslog( $_ ); };
 		if ($@) {
 			warn($@);
 		}
