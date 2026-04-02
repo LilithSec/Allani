@@ -1,0 +1,7 @@
+#!perl
+
+use strict;
+use warnings;
+
+use Allani;
+Allani->run;

@@ -1,9 +1,15 @@
 Changes
 lib/Allani.pm
+lib/Allani/Command.pm
+lib/Allani/Command/create_tables.pm
+lib/Allani/Command/ingest_json_syslog.pm
+lib/Allani/Ingest.pm
+lib/Allani/Schema.pm
+lib/Allani/Schema/Result/Syslog.pm
 LICENSE
 Makefile.PL
 MANIFEST			This list of files
-README
+README.md
 t/00-load.t
 t/manifest.t
 t/pod-coverage.t
