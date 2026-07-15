@@ -21,7 +21,8 @@ sub execute {
 	$self->{'app'}->read_in_config( 'config' => $self->{'app'}{'global_options'}{'config'} );
 
 	my $dbh      = $self->{'app'}->connect_dbi;
-	my $ingester = Allani::Ingest->new( 'dbh' => $dbh );
+	my $munger   = $self->{'app'}->build_munger;
+	my $ingester = Allani::Ingest->new( 'dbh' => $dbh, 'munger' => $munger );
 
 	while ( readline(STDIN) ) {
 		eval { $ingester->ingest_json_syslog( $_ ); };

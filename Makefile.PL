@@ -2,6 +2,8 @@ use 5.006;
 use strict;
 use warnings;
 use ExtUtils::MakeMaker;
+use File::ShareDir::Install;
+install_share 'share';
 
 my %WriteMakefileArgs = (
 	NAME               => 'Allani',
@@ -10,21 +12,28 @@ my %WriteMakefileArgs = (
 	ABSTRACT_FROM      => 'lib/Allani.pm',
 	LICENSE            => 'gpl_2',
 	MIN_PERL_VERSION   => '5.006',
-	EXE_FILES          => ['src_bin/allani'],
+	EXE_FILES          => [ 'src_bin/allani', 'src_bin/ishara' ],
 	CONFIGURE_REQUIRES => {
-		'ExtUtils::MakeMaker' => '0',
+		'ExtUtils::MakeMaker'     => '0',
+		'File::ShareDir::Install' => '0',
 	},
 	TEST_REQUIRES => {
 		'Test::More' => '0',
 	},
 	PREREQ_PM => {
-		'JSON::XS'    => '0',
-		'DBI'         => '0',
-		'DBD::Pg'     => '0',
-		'App::Cmd'    => '0',
-		'YAML::XS'    => '0',
-		'File::Slurp' => '0',
-		'Hash::Merge' => '0',
+		'JSON::XS'                => '0',
+		'DBI'                     => '0',
+		'DBD::Pg'                 => '0',
+		'App::Cmd'                => '0',
+		'YAML::XS'                => '0',
+		'File::Slurp'             => '0',
+		'Hash::Merge'             => '0',
+		'Log::Munger'             => '0',
+		'DBIx::Class'             => '0',
+		'DBIx::Class::Migration'  => '0',
+		'File::ShareDir'          => '0',
+		'POE'                     => '0',
+		'Net::Server::Daemonize'  => '0',
 	},
 	dist       => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
 	clean      => { FILES    => 'Allani-*' },
@@ -59,3 +68,6 @@ delete $WriteMakefileArgs{LICENSE}
 	unless eval { ExtUtils::MakeMaker->VERSION('6.31'); 1 };
 
 WriteMakefile(%WriteMakefileArgs);
+
+package MY;
+use File::ShareDir::Install qw(postamble);

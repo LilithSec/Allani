@@ -1,0 +1,100 @@
+#!perl
+
+# ishara - Allani's web-log follower. Tails the access/error logs named by the
+# web_logs config sets and carries each line to Allani's gate (the http_access
+# / http_error tables). Akin to Baphomet's galla.
+
+use strict;
+use warnings;
+use Getopt::Long;
+use Pod::Usage;
+use Net::Server::Daemonize qw(daemonize);
+use Allani;
+use Allani::Ishara;
+
+our $VERSION = $Allani::Ishara::VERSION;
+
+sub main::VERSION_MESSAGE {
+	print 'ishara v. ' . $Allani::Ishara::VERSION . "\n";
+	exit 255;
+}
+
+sub main::HELP_MESSAGE {
+	pod2usage( -exitval => 255, -verbose => 2, -output => \*STDOUT );
+}
+
+my $name       = 'all';
+my $config     = '/usr/local/etc/allani.yaml';
+my $foreground;
+my $version;
+my $help;
+GetOptions(
+	'version|v'    => \$version,
+	'help|h'       => \$help,
+	'name=s'       => \$name,
+	'config=s'     => \$config,
+	'foreground|f' => \$foreground,
+) || pod2usage( -exitval => 255, -verbose => 1, -output => \*STDERR );
+
+if ($help) {
+	main::HELP_MESSAGE;
+	exit 42;
+}
+if ($version) {
+	main::VERSION_MESSAGE;
+	exit 42;
+}
+
+my $app = Allani->new;
+$app->read_in_config( 'config' => $config );
+
+my $ishara = Allani::Ishara->new( 'app' => $app, 'name' => $name );
+
+if ($foreground) {
+	# supervised or run by hand, so just write the PID file ourselves
+	open( my $pid_fh, '>', $ishara->pid_path )
+		|| die( 'Failed to open the PID file "' . $ishara->pid_path . '"... ' . $! );
+	print $pid_fh $$;
+	close($pid_fh);
+} else {
+	daemonize( $>, ( split( /\s+/, $) ) )[0], $ishara->pid_path );
+}
+
+$ishara->start;
+
+unlink( $ishara->pid_path ) if ( -e $ishara->pid_path );
+
+__END__
+
+=head1 NAME
+
+ishara - Allani's web-log follower
+
+=head1 SYNOPSIS
+
+ishara [B<--name>=<set>] [B<--config>=<config>] [B<-f>|B<--foreground>]
+
+=head1 DESCRIPTION
+
+Tails the access and error logs named by the C<web_logs> sets in the Allani
+config, parses each line through Log::Munger, and inserts it into the
+C<http_access> / C<http_error> tables. File offsets are persisted under the
+state directory (default C</var/db/allani>) so a restart resumes exactly
+where it left off.
+
+=head1 OPTIONS
+
+=head2 --name=<set>
+
+The C<web_logs> set to follow, or C<all> (the default) for every set.
+
+=head2 --config=<config>
+
+Config file to use. Default C</usr/local/etc/allani.yaml>.
+
+=head2 -f|--foreground
+
+Do not daemonize. Ishara writes its own PID file and runs in the foreground,
+for supervision (systemd, etc.) or running by hand.
+
+=cut
