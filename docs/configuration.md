@@ -53,6 +53,39 @@ Notes:
   `chmod 640 /usr/local/etc/allani.yaml`. On connection failure the
   DSN and user are printed, but the password is never echoed.
 
+## indexes (per-field search indexes)
+
+The schema migrations already ship the default indexes — the GIN index on
+`raw` (for `--field key=value`), composite `(column, id)` btrees for the
+convenience columns, and timestamp btrees for `--since`/`prune`. Those cover
+the everyday searches.
+
+Non-equality `--field` operators (`>`, `<`, `~`, `=~`, ...) extract a single
+enriched field and can't use the `raw` GIN index, so searching a large table by
+one of those is slow unless that specific field is indexed. These per-field
+indexes are managed in the database (the `managed_indexes` table) via
+[`allani index`](usage.md#index), not the config:
+
+```shell
+allani index add syslog dovecot_event
+allani index add syslog url --trigram
+```
+
+The `indexes:` **config key is legacy** — a one-time `allani index import` reads
+it into `managed_indexes`, after which you should delete it from the config:
+
+```yaml
+indexes:            # legacy: run `allani index import`, then remove this
+  syslog:
+    - dovecot_event
+    - { field: ssh_user, trigram: true }
+  http_error:
+    - code
+```
+
+Every index costs write time on ingest, so index only the fields you actually
+search by operator.
+
 ## web_logs (the `ishara` follower)
 
 `ishara` — Allani's web-log follower — tails Apache/nginx logs and feeds

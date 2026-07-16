@@ -3,30 +3,13 @@ package Allani::Command::prune;
 use strict;
 use warnings;
 use Allani -command;
-
-my %SOURCES = (
-	'syslog' => {
-		'table'      => 'syslog',
-		'ts'         => { 'c_isodate' => 1, 'r_isodate' => 1, 's_isodate' => 1 },
-		'default_ts' => 'r_isodate',
-	},
-	'http_access' => {
-		'table'      => 'http_access',
-		'ts'         => { 'r_isodate' => 1, 'req_isodate' => 1 },
-		'default_ts' => 'r_isodate',
-	},
-	'http_error' => {
-		'table'      => 'http_error',
-		'ts'         => { 'r_isodate' => 1, 'err_isodate' => 1 },
-		'default_ts' => 'r_isodate',
-	},
-);
+use Allani::Sources ();
 
 sub opt_spec {
 	return (
-		[ 'source|s=s',   'which table: syslog or http_access (default syslog)' ],
+		[ 'source|s=s',   'which table: syslog, http_access, or http_error (default syslog)' ],
 		[ 'older-than=s', 'delete rows older than this (e.g. 90d, 24h) -- required' ],
-		[ 'column=s',     'timestamp column to compare (default depends on --source)' ],
+		[ 'column=s',     'timestamp column to compare (default r_isodate)' ],
 		[ 'dry-run|n',    'report how many rows would be deleted without deleting' ],
 	);
 }
@@ -36,9 +19,9 @@ sub abstract { 'delete rows older than a given age (retention)' }
 sub description {
 	return
 		"Deletes rows whose timestamp is older than the given age, for retention. The age\n"
-		. "is a short duration like 90d, 24h, or 30m. --source picks the table (syslog or\n"
-		. "http_access); --column picks the timestamp column. Use --dry-run to see the count\n"
-		. "first.";
+		. "is a short duration like 90d, 24h, or 30m. --source picks the table (syslog,\n"
+		. "http_access, http_error); --column picks the timestamp column (received time,\n"
+		. "r_isodate, by default). Use --dry-run to see the count first.";
 }
 
 sub validate { return 1 }
@@ -51,12 +34,13 @@ sub execute {
 	}
 
 	my $source = defined( $opt->source ) ? $opt->source : 'syslog';
-	my $meta   = $SOURCES{$source};
+	my $meta   = Allani::Sources::source($source);
 	if ( !defined($meta) ) {
-		die( '--source must be one of ' . join( ', ', sort keys %SOURCES ) . "\n" );
+		die( '--source must be one of ' . join( ', ', Allani::Sources::names() ) . "\n" );
 	}
 
-	my $column = defined( $opt->column ) ? $opt->column : $meta->{'default_ts'};
+	# retention compares the received time by default, not the message time
+	my $column = defined( $opt->column ) ? $opt->column : 'r_isodate';
 	if ( !$meta->{'ts'}{$column} ) {
 		die( '--column for ' . $source . ' must be one of ' . join( ', ', sort keys %{ $meta->{'ts'} } ) . "\n" );
 	}

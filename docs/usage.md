@@ -32,8 +32,10 @@ allani help <command>
 | `munge`           | preview enrichment for a line without storing it                    |
 | `enrich`          | re-run enrichment over rows already stored                          |
 | `search`          | query stored rows with simple filters                               |
+| `tail`            | show the most recent rows, optionally following new ones            |
 | `stats`           | count rows grouped by a field                                       |
 | `prune`           | delete rows older than a given age (retention)                      |
+| `index`           | create the per-enriched-field indexes named in the config           |
 
 `deploy`/`migrate` wrap `dbic-migration` with the schema class and the
 connection from the config, so you do not retype it — see
@@ -150,10 +152,13 @@ allani check
 Previews what enrichment would extract from a line, without storing
 anything — the tool for tuning `munger_rules`. Input is an argument or
 stdin; a full JSON record, or a bare `MESSAGE` with `--program` to gate.
+By default it prints just the extracted fields; `--full` prints the whole
+record with them merged under `enriched`, exactly as it would be stored;
 `--explain` shows which rule fired.
 
 ```shell
 allani munge '{"PROGRAM":"sshd","MESSAGE":"Failed password for root from 203.0.113.7 port 2222 ssh2"}'
+allani munge --full -p sshd 'Failed password for root from 203.0.113.7 port 2222 ssh2'
 allani munge --explain -p sshd 'Failed password for root from 203.0.113.7 port 2222 ssh2'
 ```
 
@@ -187,6 +192,41 @@ allani search --source http_access --status 404 --vhost www.example.com
 allani search --source http_error --loglevel error --since 1h
 ```
 
+`--field key<op>value` supports operators beyond `=`:
+
+| op | meaning | indexed? |
+|----|---------|----------|
+| `=`  | equals (jsonb containment) | yes — the GIN index on `raw` |
+| `!=` / `<>` | not equal (a missing field counts as not-equal) | no |
+| `>` `<` `>=` `<=` | numeric compare when the value is a number, else text | no |
+| `~` / `!~` | POSIX regex match / not-match | no |
+| `=~` | substring, case-insensitive (`ILIKE %value%`) | no |
+
+Only `=` uses the `raw` GIN index (schema version 4). The other operators
+extract and compare per row, so **pair them with a column or `--since` filter**,
+or index the specific field with [`index`](#index) below — otherwise they scan
+the table. Apply `allani migrate` if you are on an older schema.
+
+`--program` and `--host` switch to `LIKE` automatically when their value
+contains a `%` wildcard, e.g. `--program 'postfix/%'` or `--host 'web%'`.
+
+## tail
+
+Prints the last few rows (oldest first, newest at the bottom) and, with
+`-f`/`--follow`, keeps polling for newer rows and printing them as they
+arrive — the database analog of `tail -f`. New rows are found by `id` (the
+monotonic primary key), so nothing is missed or repeated. It shares
+`--source` and all the filters with `search`; `Ctrl-C` stops a follow.
+
+```shell
+allani tail -n 20                                  # last 20 syslog rows
+allani tail -f --program sshd                      # follow sshd
+allani tail --source http_error -f --loglevel error
+```
+
+`-n`/`--lines` sets the initial batch (default 10); `--interval` the poll
+seconds when following (default 2).
+
 ## stats
 
 Counts rows grouped by a field, highest first. `--source` picks the table
@@ -211,6 +251,35 @@ allani prune --older-than 90d --dry-run
 allani prune --source http_access --older-than 30d
 allani prune --source http_error --older-than 30d
 ```
+
+## index
+
+Manages btree / trigram indexes on individual enriched fields so non-equality
+`--field` searches (`>`, `<`, `~`, `=~`, ...) on those fields are fast. The set
+of managed indexes lives in the `managed_indexes` table (schema version 6), not
+the config. It is verb-dispatched:
+
+```shell
+allani index                       # (list) the managed indexes and whether they exist
+allani index list --all            # also show schema/other indexes on the tables
+allani index add syslog dovecot_event
+allani index add syslog url --trigram      # trigram GIN, for ~ / =~ / ILIKE
+allani index drop syslog dovecot_event
+allani index drop --name allani_ix_syslog_url_trgm
+allani index sync                  # create any tracked index that is missing
+allani index sync --prune          # also drop managed indexes no longer tracked
+allani index import                # seed the table from a legacy 'indexes' config block
+```
+
+`--concurrently` builds/drops without locking ingest; `--dry-run` shows what
+would happen. Trigram indexes need the `pg_trgm` extension, which `add`/`sync`
+create if missing.
+
+`drop` only ever touches `allani_ix_*` indexes tracked in `managed_indexes`, so
+the **schema-required indexes** — primary keys, the raw GIN, the `(column, id)`
+composites, the timestamp btrees — as well as any hand-made index, can never be
+dropped. Those defaults are shipped by the schema migrations and applied by
+`deploy`/`migrate`.
 
 # ishara — the web-log follower
 

@@ -9,6 +9,7 @@ sub opt_spec {
 	return (
 		[ 'program|p=s', 'PROGRAM to gate on when the input is a bare MESSAGE line' ],
 		[ 'explain|e',   'show which rule and pattern fired, not just the fields' ],
+		[ 'full|a',      'print the whole record with the enrichment merged in (as stored)' ],
 	);
 }
 
@@ -21,7 +22,11 @@ sub description {
 		. "from the command line arguments or, if none are given, from stdin one line at a\n"
 		. "time. Each line may be a full JSON record (as syslog-ng would send) or a bare\n"
 		. "MESSAGE string; most daemon rules gate on PROGRAM, so use --program with a bare\n"
-		. "line or feed a JSON record with PROGRAM set.";
+		. "line or feed a JSON record with PROGRAM set.\n"
+		. "\n"
+		. "By default only the extracted fields are printed. --full prints the whole record\n"
+		. "with those fields merged in under \"enriched\", exactly as it would be stored.\n"
+		. "--explain instead prints which rule and pattern fired.";
 }
 
 sub validate { return 1 }
@@ -65,7 +70,15 @@ sub execute {
 		}
 
 		my $result;
-		if ( $opt->explain ) {
+		if ( $opt->full ) {
+			# the whole record with the extracted fields merged in under
+			# "enriched", exactly as the ingest path would store it
+			my $fields = $munger->process_item( 'item' => $item );
+			$result = { %{$item} };
+			if ( defined($fields) && ref($fields) eq 'HASH' && keys( %{$fields} ) ) {
+				$result->{'enriched'} = $fields;
+			}
+		} elsif ( $opt->explain ) {
 			$result = $munger->explain_item( 'item' => $item );
 		} else {
 			$result = $munger->process_item( 'item' => $item );

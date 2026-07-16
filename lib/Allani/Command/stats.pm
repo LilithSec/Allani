@@ -3,34 +3,11 @@ package Allani::Command::stats;
 use strict;
 use warnings;
 use Allani -command;
-
-my %SOURCES = (
-	'syslog' => {
-		'table'       => 'syslog',
-		'dims'        => { map { $_ => 1 } qw(program host host_from facility priority) },
-		'default_dim' => 'program',
-		'ts'          => { 'c_isodate' => 1, 'r_isodate' => 1, 's_isodate' => 1 },
-		'default_ts'  => 's_isodate',
-	},
-	'http_access' => {
-		'table'       => 'http_access',
-		'dims'        => { map { $_ => 1 } qw(vhost host method status client_ip) },
-		'default_dim' => 'vhost',
-		'ts'          => { 'r_isodate' => 1, 'req_isodate' => 1 },
-		'default_ts'  => 'r_isodate',
-	},
-	'http_error' => {
-		'table'       => 'http_error',
-		'dims'        => { map { $_ => 1 } qw(server host loglevel code client_ip) },
-		'default_dim' => 'server',
-		'ts'          => { 'r_isodate' => 1, 'err_isodate' => 1 },
-		'default_ts'  => 'r_isodate',
-	},
-);
+use Allani::Sources ();
 
 sub opt_spec {
 	return (
-		[ 'source|s=s', 'which table: syslog or http_access (default syslog)' ],
+		[ 'source|s=s', 'which table: syslog, http_access, or http_error (default syslog)' ],
 		[ 'by=s',       'dimension to group by (default depends on --source)' ],
 		[ 'since=s',    'only rows within this window (e.g. 24h)' ],
 		[ 'column=s',   'timestamp column --since compares against (default depends on --source)' ],
@@ -43,8 +20,8 @@ sub abstract { 'count rows grouped by a field' }
 sub description {
 	return
 		"Counts rows grouped by a field and prints them highest first. --source picks the\n"
-		. "table (syslog or http_access) and its available dimensions. Restrict to a recent\n"
-		. "window with --since.";
+		. "table (syslog, http_access, http_error) and its available dimensions. Restrict to\n"
+		. "a recent window with --since.";
 }
 
 sub validate { return 1 }
@@ -53,9 +30,9 @@ sub execute {
 	my ( $self, $opt, $args ) = @_;
 
 	my $source = defined( $opt->source ) ? $opt->source : 'syslog';
-	my $meta   = $SOURCES{$source};
+	my $meta   = Allani::Sources::source($source);
 	if ( !defined($meta) ) {
-		die( '--source must be one of ' . join( ', ', sort keys %SOURCES ) . "\n" );
+		die( '--source must be one of ' . join( ', ', Allani::Sources::names() ) . "\n" );
 	}
 
 	my $by = defined( $opt->by ) ? $opt->by : $meta->{'default_dim'};

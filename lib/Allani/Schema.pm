@@ -19,7 +19,7 @@ __PACKAGE__->load_namespaces;
 # Schema version for DBIx::Class::Migration. Bump this and add a matching
 # share/migrations/PostgreSQL/{deploy,upgrade,downgrade} set for every schema
 # change.
-our $VERSION = 3;
+our $VERSION = 6;
 
 # You can replace this text with custom code or comments, and it will be preserved on regeneration
 1;
