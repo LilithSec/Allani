@@ -1,11 +1,32 @@
 # Hooking syslog-ng up to the gate
 
-syslog-ng delivers the dead to Allani's door via a `program()`
-destination: syslog-ng starts `allani ingest_json_syslog`, keeps it
-running (restarting it if it exits), and writes one JSON object per
-line to its stdin.
+There are two ways in, both sending the same JSONL (one `format-json`
+object per line):
 
-## The destination
+1. **`program()`** — syslog-ng starts `allani ingest_json_syslog`, keeps
+   it running, and writes to its stdin. Simplest; good for a standalone
+   ingest.
+2. **`unix-stream()`** — syslog-ng connects to a socket that the `ishara`
+   syslog worker listens on (`allani start` with `syslog_socket` set).
+   Preferred when running the managed daemon, since the manager keeps the
+   ingester alive and syslog-ng just reconnects.
+
+## The unix-stream destination (managed daemon)
+
+Set `syslog_socket` in the config (see
+[configuration](configuration.md#the-manager-run_dir-syslog_socket)) and
+run `allani start`; then:
+
+```
+destination d_allani {
+    unix-stream("/var/run/allani/syslog.ingest.sock"
+        template("$(format-json C_ISODATE=${C_ISODATE} R_ISODATE=${R_ISODATE} S_ISODATE=${S_ISODATE} FACILITY=${FACILITY} HOST=${HOST} HOST_FROM=${HOST_FROM} PID=${PID} PRIORITY=${PRIORITY} PROGRAM=${PROGRAM} SOURCEIP=${SOURCEIP} MESSAGE=${MESSAGE})\n"));
+};
+
+log { source(s_local); destination(d_allani); };
+```
+
+## The program destination
 
 ```
 destination d_allani {

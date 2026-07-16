@@ -86,6 +86,27 @@ indexes:            # legacy: run `allani index import`, then remove this
 Every index costs write time on ingest, so index only the fields you actually
 search by operator.
 
+## The manager (run_dir, syslog_socket)
+
+`allani start` runs a manager that supervises the `ishara` workers. A few
+top-level keys control it:
+
+| key             | default            | description                                                        |
+|-----------------|--------------------|--------------------------------------------------------------------|
+| `run_dir`       | `/var/run/allani`  | Directory for the manager PID/socket and each worker's PID.        |
+| `syslog_socket` | *(none)*           | Path of the unix socket the syslog worker listens on. **Absent = no syslog worker.** Set it to enable JSONL syslog ingestion (see [syslog-ng](syslog-ng.md)). |
+| `ishara_bin`    | `ishara`           | The `ishara` executable the manager spawns (a path, if not on `PATH`). |
+| `syslog_batch_size`     | `1000` | Rows the syslog worker buffers before flushing them in one multi-row insert. |
+| `syslog_flush_interval` | `1`    | Max seconds a partly-filled batch waits before being written anyway (so buffered rows never linger). |
+
+```yaml
+run_dir: /var/run/allani
+syslog_socket: /var/run/allani/syslog.ingest.sock
+```
+
+The manager spawns one worker per `web_logs` set and, when `syslog_socket` is
+set, one syslog worker. `stop`/`status` reach it at `<run_dir>/manager.sock`.
+
 ## web_logs (the `ishara` follower)
 
 `ishara` — Allani's web-log follower — tails Apache/nginx logs and feeds

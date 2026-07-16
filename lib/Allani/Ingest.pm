@@ -17,6 +17,14 @@ Version 0.0.1
 
 our $VERSION = '0.0.1';
 
+# the syslog columns, in bind order, and one value tuple for a row
+my $COLUMNS = '(c_isodate, r_isodate, s_isodate, facility, host, host_from, pid, priority, program, sourceip, raw)';
+my $TUPLE   = '(?,?,?,?,?,?,?,?,?,?,?)';
+
+# rows per multi-row INSERT: 11 binds/row keeps this well under PostgreSQL's
+# 65535 bound-parameter limit, so a large batch is chunked
+my $MAX_ROWS_PER_INSERT = 5000;
+
 =head1 SYNOPSIS
 
     use Allani::Ingest;
@@ -55,6 +63,7 @@ sub new {
 	my $self = {
 		'dbh'    => $opts{'dbh'},
 		'munger' => $opts{'munger'},
+		'batch'  => [],            # queued rows awaiting a flush (see queue/flush)
 	};
 	bless $self;
 
@@ -110,73 +119,124 @@ sub ingest_json_syslog {
 		return 0;
 	}
 
-	eval {
-		my $json = JSON::XS->new->utf8->decode($raw_json);
-
-		if ( !defined($json) ) {
-			die('JSON parsing returned undef');
-		}
-		if ( ref($json) ne 'HASH' ) {
-			die( '$json hash ref is "' . ref($json) . '" and not "HASH"' );
-		}
-		if ( !defined( $json->{'C_ISODATE'} ) ) {
-			die('$json->{C_ISODATE} is undef');
-		}
-		if ( !defined( $json->{'R_ISODATE'} ) ) {
-			die('$json->{R_ISODATE} is undef');
-		}
-		if ( !defined( $json->{'S_ISODATE'} ) ) {
-			die('$json->{S_ISODATE} is undef');
-		}
-		if ( !defined( $json->{'FACILITY'} ) ) {
-			die('$json->{FACILITY} is undef');
-		}
-		if ( !defined( $json->{'HOST'} ) ) {
-			die('$json->{HOST} is undef');
-		}
-		if ( !defined( $json->{'HOST_FROM'} ) ) {
-			die('$json->{HOST_FROM} is undef');
-		}
-		if ( !defined( $json->{'PRIORITY'} ) ) {
-			die('$json->{PRIORITY} is undef');
-		}
-		if ( !defined( $json->{'PROGRAM'} ) ) {
-			die('$json->{PROGRAM} is undef');
-		}
-		if ( !defined( $json->{'SOURCEIP'} ) ) {
-			die('$json->{SOURCEIP} is undef');
-		}
-
-		# raw is the primary column and is what gets enriched. Default to the
-		# verbatim line so a disabled munger, a non-match, or an enrichment
-		# failure all fall through to storing the record unchanged.
-		my $raw_to_store = $raw_json;
-		if ( defined( $self->{'munger'} ) ) {
-			my $fields;
-			# process_item is documented never to die, but guard anyway so a
-			# pathological rule can never cost this log line
-			eval { $fields = $self->{'munger'}->process_item( 'item' => $json ); };
-			if ( !$@ && defined($fields) && ref($fields) eq 'HASH' && keys( %{$fields} ) ) {
-				$json->{'enriched'} = $fields;
-				my $encoded;
-				eval { $encoded = JSON::XS->new->utf8->canonical->encode($json); };
-				if ( !$@ && defined($encoded) ) {
-					$raw_to_store = $encoded;
-				}
-			}
-		} ## end if ( defined( $self->{'munger'} ) )
-
-		$self->{'sth'}->execute(
-			$json->{'C_ISODATE'}, $json->{'R_ISODATE'}, $json->{'S_ISODATE'}, $json->{'FACILITY'},
-			$json->{'HOST'},      $json->{'HOST_FROM'}, $json->{'PID'},       $json->{'PRIORITY'},
-			$json->{'PROGRAM'},   $json->{'SOURCEIP'},  $raw_to_store,
-		);
-	};
-	if ($@) {
-		die($@);
-	}
+	my $row = $self->_build_row($raw_json);    # dies on a bad line; caller catches
+	$self->{'sth'}->execute( @{$row} );
 
 	return 1;
 } ## end sub ingest_json_syslog
+
+# Decode + validate + enrich one raw JSON line into the ordered bind values for
+# a syslog row. Dies on a malformed line or missing required field. Shared by
+# the immediate insert (ingest_json_syslog) and the batched path (queue).
+sub _build_row {
+	my ( $self, $raw_json ) = @_;
+
+	my $json = JSON::XS->new->utf8->decode($raw_json);
+
+	if ( !defined($json) ) {
+		die('JSON parsing returned undef');
+	}
+	if ( ref($json) ne 'HASH' ) {
+		die( '$json hash ref is "' . ref($json) . '" and not "HASH"' );
+	}
+	foreach my $field (qw(C_ISODATE R_ISODATE S_ISODATE FACILITY HOST HOST_FROM PRIORITY PROGRAM SOURCEIP)) {
+		if ( !defined( $json->{$field} ) ) {
+			die( '$json->{' . $field . '} is undef' );
+		}
+	}
+
+	# raw is the primary column and is what gets enriched. Default to the
+	# verbatim line so a disabled munger, a non-match, or an enrichment failure
+	# all fall through to storing the record unchanged.
+	my $raw_to_store = $raw_json;
+	if ( defined( $self->{'munger'} ) ) {
+		my $fields;
+		# process_item is documented never to die, but guard anyway so a
+		# pathological rule can never cost this log line
+		eval { $fields = $self->{'munger'}->process_item( 'item' => $json ); };
+		if ( !$@ && defined($fields) && ref($fields) eq 'HASH' && keys( %{$fields} ) ) {
+			$json->{'enriched'} = $fields;
+			my $encoded;
+			eval { $encoded = JSON::XS->new->utf8->canonical->encode($json); };
+			if ( !$@ && defined($encoded) ) {
+				$raw_to_store = $encoded;
+			}
+		}
+	} ## end if ( defined( $self->{'munger'} ) )
+
+	return [
+		$json->{'C_ISODATE'}, $json->{'R_ISODATE'}, $json->{'S_ISODATE'}, $json->{'FACILITY'},
+		$json->{'HOST'},      $json->{'HOST_FROM'}, $json->{'PID'},       $json->{'PRIORITY'},
+		$json->{'PROGRAM'},   $json->{'SOURCEIP'},  $raw_to_store,
+	];
+} ## end sub _build_row
+
+=head2 queue
+
+Decodes/validates/enriches a raw JSON line and appends its row to the batch
+buffer instead of inserting it immediately. Call L</flush> (on a size threshold
+and/or a max-wait timer) to write the buffer. Dies on a malformed line, like
+L</ingest_json_syslog>, before anything is buffered.
+
+    $ingester->queue($raw_json);
+    $ingester->flush if ( $ingester->pending >= 1000 );
+
+=cut
+
+sub queue {
+	my ( $self, $raw_json ) = @_;
+
+	if ( !defined($raw_json) ) {
+		return 0;
+	}
+
+	push( @{ $self->{'batch'} }, $self->_build_row($raw_json) );
+
+	return 1;
+} ## end sub queue
+
+=head2 pending
+
+Returns the number of rows currently buffered by L</queue>.
+
+=cut
+
+sub pending { return scalar( @{ $_[0]->{'batch'} } ); }
+
+=head2 flush
+
+Writes every buffered row in one (or, for a very large buffer, a few)
+multi-row INSERT and empties the buffer. Returns the number of rows written.
+A chunk whose insert fails is logged (via warn) and dropped so the buffer
+always drains -- a bad batch never wedges the stream. Safe to call with an
+empty buffer.
+
+=cut
+
+sub flush {
+	my ($self) = @_;
+
+	my $batch = $self->{'batch'};
+	return 0 if ( !@{$batch} );
+
+	my $written = 0;
+	while ( @{$batch} ) {
+		my @chunk = splice( @{$batch}, 0, $MAX_ROWS_PER_INSERT );
+		my $sql   = 'INSERT INTO syslog ' . $COLUMNS . ' VALUES ' . join( ',', ($TUPLE) x scalar(@chunk) );
+		my @binds = map { @{$_} } @chunk;
+
+		eval {
+			my $sth = $self->{'dbh'}->prepare_cached($sql);
+			$sth->execute(@binds);
+		};
+		if ($@) {
+			warn( 'batch insert of ' . scalar(@chunk) . ' syslog row(s) failed... ' . $@ );
+		} else {
+			$written += scalar(@chunk);
+		}
+	} ## end while ( @{$batch} )
+
+	return $written;
+} ## end sub flush
 
 1;    # End of Allani

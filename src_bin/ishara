@@ -26,6 +26,7 @@ sub main::HELP_MESSAGE {
 my $name       = 'all';
 my $config     = '/usr/local/etc/allani.yaml';
 my $foreground;
+my $syslog;
 my $version;
 my $help;
 GetOptions(
@@ -34,6 +35,7 @@ GetOptions(
 	'name=s'       => \$name,
 	'config=s'     => \$config,
 	'foreground|f' => \$foreground,
+	'syslog|s'     => \$syslog,
 ) || pod2usage( -exitval => 255, -verbose => 1, -output => \*STDERR );
 
 if ($help) {
@@ -48,7 +50,10 @@ if ($version) {
 my $app = Allani->new;
 $app->read_in_config( 'config' => $config );
 
-my $ishara = Allani::Ishara->new( 'app' => $app, 'name' => $name );
+my $ishara =
+	$syslog
+	? Allani::Ishara->new( 'app' => $app, 'syslog' => 1 )
+	: Allani::Ishara->new( 'app' => $app, 'name' => $name );
 
 if ($foreground) {
 	# supervised or run by hand, so just write the PID file ourselves
@@ -86,7 +91,14 @@ where it left off.
 
 =head2 --name=<set>
 
-The C<web_logs> set to follow, or C<all> (the default) for every set.
+The C<web_logs> set to follow, or C<all> (the default) for every set. Ignored
+in C<--syslog> mode.
+
+=head2 -s|--syslog
+
+Run in syslog mode: listen on a unix socket for JSONL syslog records (as
+syslog-ng's C<unix-stream> destination sends) and ingest them, instead of
+tailing web logs.
 
 =head2 --config=<config>
 

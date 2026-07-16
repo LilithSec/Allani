@@ -3,11 +3,14 @@ package Allani::Ishara;
 use 5.006;
 use strict;
 use warnings;
-use POE qw( Wheel::FollowTail );
+use POE qw( Wheel::FollowTail Wheel::SocketFactory Wheel::ReadWrite Filter::Line );
+use Socket qw( PF_UNIX );
 use Sys::Hostname qw(hostname);
 use File::Path qw(make_path);
+use Allani::Ingest             ();
 use Allani::Ingest::HttpAccess ();
 use Allani::Ingest::HttpError  ();
+use Allani::LogDrek            qw( log_drek );
 
 =head1 NAME
 
@@ -60,6 +63,10 @@ C<www.example.com>, port 443).
 
     - name :: The web_logs set to follow, or 'all' (the default) for every set.
 
+    - syslog :: When true, run in syslog mode: listen on a unix socket for
+        JSONL syslog records (as syslog-ng's unix-stream destination sends) and
+        ingest them, instead of tailing web logs. The name becomes 'syslog'.
+
 =cut
 
 sub new {
@@ -69,21 +76,26 @@ sub new {
 		die('app is undef');
 	}
 
+	my $syslog = $opts{'syslog'} ? 1 : 0;
+
 	my $self = {
 		'app'       => $opts{'app'},
-		'name'      => ( defined( $opts{'name'} ) && $opts{'name'} ne '' ) ? $opts{'name'} : 'all',
+		'mode'      => ( $syslog ? 'syslog' : 'web' ),
+		'name'      => $syslog ? 'syslog'
+		: ( ( defined( $opts{'name'} ) && $opts{'name'} ne '' ) ? $opts{'name'} : 'all' ),
 		'hostname'  => hostname(),
-		'sets'      => [],       # parsed web_logs sets
+		'sets'      => [],       # parsed web_logs sets (web mode)
 		'mungers'   => {},       # geoip path (or '') => Log::Munger
 		'ingesters' => {},       # "set/kind/vhost/port" => Ingest object
 		'wheels'    => {},       # wheel id => { wheel, file, ingester }
 		'by_file'   => {},       # file => wheel id (already tailing?)
 		'positions' => {},       # file => { inode, offset }
+		'clients'   => {},       # syslog mode: read/write wheel id => wheel
 		'dbh'       => undef,
 	};
 	bless $self;
 
-	$self->_load_sets;
+	$self->_load_sets if ( $self->{'mode'} eq 'web' );
 
 	return $self;
 } ## end sub new
@@ -135,6 +147,8 @@ final checkpoint.
 sub start {
 	my ($self) = @_;
 
+	return $self->start_syslog if ( $self->{'mode'} eq 'syslog' );
+
 	$self->{'dbh'} = $self->{'app'}->connect_dbi;
 	$self->_load_positions;
 
@@ -156,6 +170,148 @@ sub start {
 
 	return 1;
 } ## end sub start
+
+=head2 start_syslog
+
+Runs the syslog-mode POE kernel: a unix stream socket that reads JSONL syslog
+records (one C<format-json> object per line, as syslog-ng's unix-stream
+destination sends) and ingests each via L<Allani::Ingest>. Returns on TERM/INT.
+
+=cut
+
+sub start_syslog {
+	my ($self) = @_;
+
+	$self->{'batch_size'}     = $self->_batch_size;
+	$self->{'flush_interval'} = $self->_flush_interval;
+
+	$self->{'dbh'}      = $self->{'app'}->connect_dbi;
+	$self->{'ingester'} = Allani::Ingest->new(
+		'dbh'    => $self->{'dbh'},
+		'munger' => $self->{'app'}->build_munger,
+	);
+
+	POE::Session->create(
+		'object_states' => [
+			$self => {
+				'_start'       => '_syslog_poe_start',
+				'accepted'     => '_syslog_accepted',
+				'got_line'     => '_syslog_got_line',
+				'flush'        => '_syslog_flush_tick',
+				'sock_error'   => '_syslog_sock_error',
+				'client_error' => '_syslog_client_error',
+				'shutdown'     => '_shutdown',
+			},
+		],
+	);
+
+	POE::Kernel->run;
+
+	return 1;
+} ## end sub start_syslog
+
+sub _syslog_poe_start {
+	my ( $self, $kernel ) = @_[ OBJECT, KERNEL ];
+
+	my $dir = $self->_run_dir;
+	if ( !-d $dir ) {
+		eval { make_path( $dir, { 'mode' => 0755 } ); };
+	}
+
+	my $sock = $self->_ingest_socket;
+	unlink($sock) if ( -S $sock );    # clear a stale socket from a prior run
+
+	$self->{'listener'} = POE::Wheel::SocketFactory->new(
+		'SocketDomain' => PF_UNIX,
+		'BindAddress'  => $sock,
+		'SuccessEvent' => 'accepted',
+		'FailureEvent' => 'sock_error',
+	);
+
+	$kernel->sig( 'TERM' => 'shutdown' );
+	$kernel->sig( 'INT'  => 'shutdown' );
+
+	# the max-wait timer: flush whatever is buffered every flush_interval
+	# seconds so a partly-filled batch never lingers
+	$kernel->delay( 'flush' => $self->{'flush_interval'} );
+
+	log_drek(
+		'info',
+		'syslog ingest listening on '
+			. $sock
+			. ' (batch '
+			. $self->{'batch_size'}
+			. ', flush '
+			. $self->{'flush_interval'} . 's)',
+		undef, 'ishara-syslog'
+	);
+
+	return;
+} ## end sub _syslog_poe_start
+
+# flush any buffered rows on the max-wait timer, then re-arm it
+sub _syslog_flush_tick {
+	my ( $self, $kernel ) = @_[ OBJECT, KERNEL ];
+
+	$self->{'ingester'}->flush if ( $self->{'ingester'}->pending );
+	$kernel->delay( 'flush' => $self->{'flush_interval'} );
+
+	return;
+} ## end sub _syslog_flush_tick
+
+# a syslog-ng connection: read it line by line (JSONL)
+sub _syslog_accepted {
+	my ( $self, $handle ) = @_[ OBJECT, ARG0 ];
+
+	my $rw = POE::Wheel::ReadWrite->new(
+		'Handle'     => $handle,
+		'Filter'     => POE::Filter::Line->new,
+		'InputEvent' => 'got_line',
+		'ErrorEvent' => 'client_error',
+	);
+	$self->{'clients'}{ $rw->ID } = $rw;
+
+	return;
+} ## end sub _syslog_accepted
+
+sub _syslog_got_line {
+	my ( $self, $line ) = @_[ OBJECT, ARG0 ];
+
+	return if ( !defined($line) || $line =~ /\A\s*\z/ );
+
+	# queue dies on a bad line (before buffering it) but never loses a good one;
+	# log and carry on so one malformed record can't drop the stream
+	eval { $self->{'ingester'}->queue($line); };
+	if ($@) {
+		log_drek( 'err', 'syslog ingest... ' . $@, undef, 'ishara-syslog' );
+		return;
+	}
+
+	# flush as soon as the batch is full; the max-wait timer handles the rest
+	if ( $self->{'ingester'}->pending >= $self->{'batch_size'} ) {
+		$self->{'ingester'}->flush;
+	}
+
+	return;
+} ## end sub _syslog_got_line
+
+sub _syslog_client_error {
+	my ( $self, $wheel_id ) = @_[ OBJECT, ARG3 ];
+
+	# ARG0 op, ARG1 errnum (0 = EOF/disconnect), ARG2 errstr, ARG3 wheel id
+	delete $self->{'clients'}{$wheel_id};
+
+	return;
+} ## end sub _syslog_client_error
+
+sub _syslog_sock_error {
+	my ( $self, $op, $errnum, $errstr ) = @_[ OBJECT, ARG0 .. ARG2 ];
+
+	log_drek( 'err', 'syslog ingest socket ' . $op . ' error... ' . $errstr . ' (' . $errnum . ')',
+		undef, 'ishara-syslog' );
+
+	return;
+} ## end sub _syslog_sock_error
 
 sub _poe_start {
 	my ( $self, $kernel ) = @_[ OBJECT, KERNEL ];
@@ -254,8 +410,16 @@ sub _checkpt {
 sub _shutdown {
 	my ( $self, $kernel ) = @_[ OBJECT, KERNEL ];
 
-	$self->checkpoint;
+	if ( $self->{'mode'} eq 'web' ) {
+		$self->checkpoint;    # persist tail offsets so a restart resumes exactly
+	} elsif ( $self->{'mode'} eq 'syslog' ) {
+		$self->{'ingester'}->flush if ( defined( $self->{'ingester'} ) );    # write anything still buffered
+		unlink( $self->_ingest_socket ) if ( -S $self->_ingest_socket );
+	}
+
 	delete $self->{'wheels'};
+	delete $self->{'clients'};
+	delete $self->{'listener'};
 	$kernel->stop;
 
 	return;
@@ -340,19 +504,50 @@ sub _glob_capture {
 
 =head2 pid_path
 
-The PID file path for this instance:
-C<< <pid_dir>/ishara.<name>.pid >> (default pid_dir C</var/run>).
+The PID file path for this instance: C<< <run_dir>/ishara.<name>.pid >>.
 
 =cut
 
 sub pid_path {
 	my ($self) = @_;
 
-	my $wl      = $self->{'app'}->config->{'web_logs'};
-	my $pid_dir = ( ref($wl) eq 'HASH' && defined( $wl->{'pid_dir'} ) ) ? $wl->{'pid_dir'} : '/var/run';
+	return $self->_run_dir . '/ishara.' . $self->{'name'} . '.pid';
+}
 
-	return $pid_dir . '/ishara.' . $self->{'name'} . '.pid';
-} ## end sub pid_path
+# the run directory holding pid files and sockets (default /var/run/allani)
+sub _run_dir {
+	my ($self) = @_;
+
+	my $config = $self->{'app'}->config;
+	return ( defined( $config->{'run_dir'} ) ) ? $config->{'run_dir'} : '/var/run/allani';
+}
+
+# the unix socket syslog-ng connects to in syslog mode
+sub _ingest_socket {
+	my ($self) = @_;
+
+	my $config = $self->{'app'}->config;
+	return ( defined( $config->{'syslog_socket'} ) )
+		? $config->{'syslog_socket'}
+		: ( $self->_run_dir . '/syslog.ingest.sock' );
+} ## end sub _ingest_socket
+
+# rows buffered before a flush; config syslog_batch_size (default 1000)
+sub _batch_size {
+	my ($self) = @_;
+
+	my $v = $self->{'app'}->config->{'syslog_batch_size'};
+	return ( defined($v) && $v > 0 ) ? $v : 1000;
+}
+
+# max seconds a partial batch waits before being written; config
+# syslog_flush_interval (default 1)
+sub _flush_interval {
+	my ($self) = @_;
+
+	my $v = $self->{'app'}->config->{'syslog_flush_interval'};
+	return ( defined($v) && $v > 0 ) ? $v : 1;
+}
 
 # the state directory holding the position tablets
 sub _state_dir {

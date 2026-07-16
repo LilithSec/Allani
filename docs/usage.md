@@ -36,6 +36,9 @@ allani help <command>
 | `stats`           | count rows grouped by a field                                       |
 | `prune`           | delete rows older than a given age (retention)                      |
 | `index`           | create the per-enriched-field indexes named in the config           |
+| `start`           | start the manager and its ishara workers                            |
+| `stop`            | stop the running manager and its workers                            |
+| `status`          | show the manager and workers status                                 |
 
 `deploy`/`migrate` wrap `dbic-migration` with the schema class and the
 connection from the config, so you do not retype it — see
@@ -281,28 +284,47 @@ composites, the timestamp btrees — as well as any hand-made index, can never b
 dropped. Those defaults are shipped by the schema migrations and applied by
 `deploy`/`migrate`.
 
-# ishara — the web-log follower
+# The manager — start / stop / status
 
-`ishara` is a separate daemon (not an `allani` subcommand) that tails the
-Apache/nginx logs named by the `web_logs` config sets and feeds each line to
-the `http_access` / `http_error` tables — the standing counterpart to piping
-a `CustomLog`/`ErrorLog` into `ingest_http_access`/`ingest_http_error`. It
-persists file offsets under `state_dir` (default `/var/db/allani`), so a
-restart resumes exactly where it left off and never re-ingests.
-
-```shell
-ishara [--name <set>] [--config <file>] [-f|--foreground]
-```
-
-- `--name <set>` follows just that `web_logs` set; the default `all` follows
-  every set in one process.
-- `-f`/`--foreground` runs without daemonizing (writing its own PID file) —
-  for systemd or running by hand. Without it, `ishara` daemonizes via
-  `Net::Server::Daemonize`.
-
-See [configuration](configuration.md#web_logs-the-ishara-follower) for the
-`web_logs` block. A minimal run:
+For a running deployment, `allani start` launches a **manager** that spawns and
+supervises the `ishara` workers: one per `web_logs` set, plus one syslog worker
+when a `syslog_socket` is configured. It restarts a worker that dies (with
+backoff), logs each worker's stdout/stderr to syslog, and answers `stop` /
+`status` on a unix control socket. PID files and sockets live under `run_dir`
+(default `/var/run/allani`).
 
 ```shell
-ishara --config /usr/local/etc/allani.yaml --foreground
+allani start                 # daemonize the manager
+allani start --foreground    # run it in the foreground (systemd, or by hand)
+allani status                # uptime + per-worker up/down, PID, restart count
+allani stop                  # stop the workers and the manager
 ```
+
+`allani` logs (via syslog, ident `allani`) when it starts up and loads its
+config; workers log under `ishara-<name>`. See
+[configuration](configuration.md#the-manager-run_dir-syslog_socket) for
+`run_dir`, `syslog_socket`, and `ishara_bin`.
+
+# ishara — the worker
+
+`ishara` is the worker daemon the manager spawns; it can also be run directly.
+In **web mode** it tails the Apache/nginx logs named by a `web_logs` set and
+feeds each line to the `http_access` / `http_error` tables, persisting file
+offsets under `state_dir` (default `/var/db/allani`) so a restart resumes
+exactly. In **syslog mode** it listens on a unix socket for JSONL syslog and
+ingests it into the `syslog` table.
+
+```shell
+ishara [--name <set>] [--config <file>] [-f|--foreground]   # web mode
+ishara --syslog [--config <file>] [-f|--foreground]         # syslog socket mode
+```
+
+- `--name <set>` follows just that `web_logs` set; `all` (default) follows every
+  set in one process.
+- `-s`/`--syslog` runs the syslog JSONL socket ingester instead (see
+  [syslog-ng](syslog-ng.md)).
+- `-f`/`--foreground` runs without daemonizing; the manager always spawns
+  workers this way.
+
+Normally you run `allani start` and let the manager manage the workers rather
+than launching `ishara` by hand.

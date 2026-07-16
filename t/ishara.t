@@ -76,6 +76,45 @@ subtest 'set loading' => sub {
 	is( $one->{'sets'}[0]{'name'}, 'foo', 'the right set' );
 };
 
+# ---- syslog mode -------------------------------------------------------------
+
+subtest 'syslog mode construction and paths' => sub {
+	my $app = bless {
+		'allani' => { 'config' => { 'run_dir' => '/run/x', 'syslog_socket' => '/run/x/s.sock' } }
+	}, 'Allani';
+	my $s = Allani::Ishara->new( 'app' => $app, 'syslog' => 1 );
+	is( $s->{'mode'},         'syslog',                  'mode is syslog' );
+	is( $s->{'name'},         'syslog',                  'name is syslog' );
+	is( $s->pid_path,         '/run/x/ishara.syslog.pid', 'pid under run_dir' );
+	is( $s->_ingest_socket,   '/run/x/s.sock',           'ingest socket from config' );
+
+	# default socket derived from run_dir
+	my $app2 = bless { 'allani' => { 'config' => { 'run_dir' => '/run/y' } } }, 'Allani';
+	my $s2 = Allani::Ishara->new( 'app' => $app2, 'syslog' => 1 );
+	is( $s2->_ingest_socket, '/run/y/syslog.ingest.sock', 'ingest socket defaults under run_dir' );
+	is( scalar( @{ $s2->{'sets'} } ), 0, 'no web sets loaded in syslog mode' );
+
+	# batching defaults
+	is( $s2->_batch_size,     1000, 'batch size default' );
+	is( $s2->_flush_interval, 1,    'flush interval default' );
+
+	# batching is configurable from the config file
+	my $app3 = bless {
+		'allani' => { 'config' => { 'syslog_batch_size' => 250, 'syslog_flush_interval' => 5 } }
+	}, 'Allani';
+	my $s3 = Allani::Ishara->new( 'app' => $app3, 'syslog' => 1 );
+	is( $s3->_batch_size,     250, 'batch size read from config' );
+	is( $s3->_flush_interval, 5,   'flush interval read from config' );
+
+	# a non-positive value falls back to the default
+	my $app4 = bless {
+		'allani' => { 'config' => { 'syslog_batch_size' => 0, 'syslog_flush_interval' => -1 } }
+	}, 'Allani';
+	my $s4 = Allani::Ishara->new( 'app' => $app4, 'syslog' => 1 );
+	is( $s4->_batch_size,     1000, 'non-positive batch size => default' );
+	is( $s4->_flush_interval, 1,    'non-positive flush interval => default' );
+};
+
 # ---- tablet round-trip + _seek_for -------------------------------------------
 
 subtest 'position tablet persist / load / seek' => sub {
