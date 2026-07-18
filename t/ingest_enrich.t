@@ -117,6 +117,27 @@ subtest 'PID stays optional under enrichment' => sub {
 	is( row_as_hash()->{'PID'}, undef, 'PID bound as undef' );
 };
 
+subtest 'a non-integer PID is coerced to NULL' => sub {
+	# FreeBSD kernel lines carry a boot timestamp in the bracket syslog-ng parses
+	# as PID, e.g. "kernel[6558585.501484]: ...", so PID arrives as a
+	# seconds.microseconds string that a bigint column will reject. It must land
+	# as undef/NULL rather than fail the insert; the original still lives in raw.
+	my $ing = Allani::Ingest->new( 'dbh' => bless( {}, 'FakeDbh' ) );
+
+	@last_row = ();
+	$ing->ingest_json_syslog( encode_json( base_record( 'PROGRAM' => 'kernel', 'PID' => '6558585.501484' ) ) );
+	is( row_as_hash()->{'PID'}, undef, 'a seconds.microseconds PID binds as undef' );
+	is( decode_json( row_as_hash()->{'raw'} )->{'PID'}, '6558585.501484', 'original PID still preserved in raw' );
+
+	@last_row = ();
+	$ing->ingest_json_syslog( encode_json( base_record( 'PID' => '25446' ) ) );
+	is( row_as_hash()->{'PID'}, '25446', 'a normal integer PID is bound unchanged' );
+
+	@last_row = ();
+	$ing->ingest_json_syslog( encode_json( base_record( 'PID' => 'notanumber' ) ) );
+	is( row_as_hash()->{'PID'}, undef, 'a non-numeric PID binds as undef' );
+};
+
 subtest 'a missing required field still dies, munger or not' => sub {
 	plan skip_all => 'Log::Munger / rule files unavailable' unless $have_munger;
 

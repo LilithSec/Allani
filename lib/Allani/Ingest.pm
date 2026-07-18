@@ -165,11 +165,28 @@ sub _build_row {
 	} ## end if ( defined( $self->{'munger'} ) )
 
 	return [
-		$json->{'C_ISODATE'}, $json->{'R_ISODATE'}, $json->{'S_ISODATE'}, $json->{'FACILITY'},
-		$json->{'HOST'},      $json->{'HOST_FROM'}, $json->{'PID'},       $json->{'PRIORITY'},
+		$json->{'C_ISODATE'}, $json->{'R_ISODATE'}, $json->{'S_ISODATE'},  $json->{'FACILITY'},
+		$json->{'HOST'},      $json->{'HOST_FROM'}, _clean_pid( $json->{'PID'} ), $json->{'PRIORITY'},
 		$json->{'PROGRAM'},   $json->{'SOURCEIP'},  $raw_to_store,
 	];
 } ## end sub _build_row
+
+# The pid column is a bigint, but the bracketed value syslog-ng parses as PID is
+# not always a process id. FreeBSD kernel lines look like
+# "kernel[6558585.501484]: ..." where the brackets hold the boot timestamp
+# (seconds.microseconds), so PID arrives as "6558585.501484" and the bigint
+# bind is rejected, taking the whole INSERT (or, in batch mode, the whole chunk)
+# down with it. Coerce anything that is not a plain non-negative integer within
+# bigint range to undef/NULL; the untouched original still lives in the raw JSON.
+sub _clean_pid {
+	my ($pid) = @_;
+
+	return undef if ( !defined($pid) );
+	return undef if ( $pid !~ /\A[0-9]+\z/ );
+	return undef if ( $pid > 9223372036854775807 );
+
+	return $pid;
+} ## end sub _clean_pid
 
 =head2 queue
 
