@@ -186,14 +186,52 @@ sub build_where {
 	return ( \@where, \@binds );
 } ## end sub build_where
 
-# does a string look like a plain number (no leading zeros on multi-digit ints)?
+# Decides whether a --field value should be compared as a number rather than as
+# text. Enriched values are stored as JSON, so a field may hold either, and the
+# same filter has to work both ways: 'bytes>1000' wants a numeric comparison,
+# 'version>2.4.1' a textual one.
+#
+# The test is deliberately stricter than Perl's own idea of a number. A leading
+# zero is not accepted on a multi-digit integer, so values that only look
+# numeric -- a zero-padded port, an octal file mode, an account number -- keep
+# being compared as the strings they are.
+#
+#   - $v :: The value half of a --field filter, or undef. Not a method argument
+#       -- this is a plain function.
+#
+# Returns 1 when the value is an optionally negative integer or decimal with no
+# leading zeros, and 0 otherwise, including for undef.
+#
+#     _looks_numeric('1000');     # 1
+#     _looks_numeric('-2.5');     # 1
+#     _looks_numeric('007');      # 0 -- a padded number stays text
+#     _looks_numeric('2.4.1');    # 0
 sub _looks_numeric {
 	my ($v) = @_;
 	return ( defined($v) && $v =~ /\A-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?\z/ ) ? 1 : 0;
 }
 
-# --field key<op>value -> (key, op, value). Keys are word-ish and never hold an
-# operator char, so the first operator after the key wins.
+# Splits one --field filter into its three parts. Enriched field names are
+# word-ish -- letters, digits, underscores, and dots -- and so never contain an
+# operator character, which means the first operator after the name is
+# unambiguously the operator, and everything after it is the value however odd
+# it looks.
+#
+#   - $f :: One --field argument as it came off the command line, in the form
+#       key<op>value, e.g. 'dovecot_event=login'. Whitespace either side of the
+#       operator is allowed and discarded. Not a method argument -- this is a
+#       plain function.
+#
+# Returns the three-element list ( $key, $op, $value ): the field name, one of
+# the operators = != <> > < >= <= ~ !~ =~, and the value, which may be empty and
+# may contain anything, newlines included.
+#
+# Dies with a newline-terminated message -- so App::Cmd prints it without a
+# source line -- when the argument does not parse.
+#
+#     _parse_field('dovecot_event=login');   # ( 'dovecot_event', '=', 'login' )
+#     _parse_field('bytes >= 1000');         # ( 'bytes', '>=', '1000' )
+#     _parse_field('url =~ /admin');         # ( 'url', '=~', '/admin' )
 sub _parse_field {
 	my ($f) = @_;
 
@@ -204,12 +242,57 @@ sub _parse_field {
 	die( '--field must be key<op>value (op one of = != <> > < >= <= ~ !~ =~), got "' . $f . "\"\n" );
 } ## end sub _parse_field
 
-# build the WHERE fragment + binds for one --field predicate.
+# Builds the WHERE fragment and bind values for one --field predicate.
 #
-# '=' uses jsonb containment (@>) so the GIN index on raw serves it -- fast even
-# when nothing matches. Every other operator extracts raw->'enriched'->>key and
-# compares, which the GIN index cannot serve: pair it with a column/time filter,
-# or add a per-key index with `allani index`.
+# The two halves of this behave very differently at query time. '=' uses jsonb
+# containment (@>), which the GIN index on raw serves, so it stays fast even
+# when nothing matches; because the stored value may be a JSON string or a JSON
+# number, a numeric-looking value is matched both ways. Every other operator has
+# to extract raw->'enriched'->>key and compare it, which the GIN index cannot
+# serve. Those want either a column or time filter alongside them, or a per-key
+# index added with `allani index`.
+#
+# The field name and value are always bound, never interpolated, so a filter can
+# name any key without becoming an injection route. The operator is the one
+# thing that reaches the SQL as text, and it can only be one of the operators
+# _parse_field recognises.
+#
+#   - $k :: The enriched field name, from _parse_field.
+#
+#   - $op :: The operator, one of = != <> > < >= <= ~ !~ =~, from _parse_field.
+#
+#   - $v :: The value to compare against, as a string.
+#
+# Not method arguments -- this is a plain function.
+#
+# Returns the list ( $fragment, @binds ): a WHERE fragment holding one
+# placeholder per bind, followed by the values for them in order. The caller
+# joins the fragments with AND and passes the binds to execute in the same
+# order. The operators map as follows:
+#
+#   - = :: jsonb containment, matching the value as a JSON string and, when it
+#       looks numeric, as a JSON number too. One fragment, one or two binds.
+#
+#   - != and <> :: IS DISTINCT FROM, so a row missing the field counts as not
+#       equal rather than dropping out of the result the way NULL <> value would.
+#
+#   - ~ and !~ :: PostgreSQL POSIX regular expression match and non-match.
+#
+#   - =~ :: a case-insensitive substring match, i.e. ILIKE with the value
+#       wrapped in % signs.
+#
+#   - >, <, >=, <= :: a numeric comparison when the value looks numeric, guarded
+#       with jsonb_typeof so a row storing a non-number is skipped rather than
+#       failing the whole query, and a plain text comparison otherwise.
+#
+# Dies on an unrecognised operator, which _parse_field should have already made
+# impossible.
+#
+#     _field_predicate( 'dovecot_event', '=', 'login' );
+#     # ( '(raw @> ?::jsonb)', '{"enriched":{"dovecot_event":"login"}}' )
+#
+#     _field_predicate( 'url', '=~', '/admin' );
+#     # ( "raw->'enriched'->>? ILIKE ?", 'url', '%/admin%' )
 sub _field_predicate {
 	my ( $k, $op, $v ) = @_;
 
@@ -311,19 +394,5 @@ sub emit_row {
 	print join( "\t", map { my $v = defined($_) ? $_ : ''; $v =~ s/[\r\n\t]+/ /g; $v } @{$row} ) . "\n";
 	return;
 } ## end sub emit_row
-
-=head1 AUTHOR
-
-Zane C. Bowers-Hadley, C<< <vvelox at vvelox.net> >>
-
-=head1 LICENSE AND COPYRIGHT
-
-This software is Copyright (c) 2026 by Zane C. Bowers-Hadley.
-
-This is free software, licensed under:
-
-  The GNU General Public License, Version 2, June 1991
-
-=cut
 
 1;

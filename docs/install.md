@@ -2,24 +2,40 @@
 
 ## Dependencies
 
-Declared in `Makefile.PL`. The chain is small — the ingest path is
-plain DBI and JSON::XS.
+Declared in `Makefile.PL`. The ingest path itself is plain DBI and
+JSON::XS; POE and the rest are what the `allani start` manager and its
+`ishara` workers need.
 
-| CPAN module            | FreeBSD pkg              | Debian pkg               |
-|------------------------|-------------------------|--------------------------|
-| App::Cmd               | p5-App-Cmd              | libapp-cmd-perl          |
-| DBI                    | p5-DBI                  | libdbi-perl              |
-| DBD::Pg                | p5-DBD-Pg               | libdbd-pg-perl           |
-| DBIx::Class            | p5-DBIx-Class           | libdbix-class-perl       |
-| DBIx::Class::Migration | p5-DBIx-Class-Migration | libdbix-class-migration-perl |
-| File::Slurp            | p5-File-Slurp           | libfile-slurp-perl       |
-| Hash::Merge            | p5-Hash-Merge           | libhash-merge-perl       |
-| JSON::XS               | p5-JSON-XS              | libjson-xs-perl          |
-| Log::Munger            | *(CPAN)*                | *(CPAN)*                 |
-| YAML::XS               | p5-YAML-LibYAML         | libyaml-libyaml-perl     |
+| CPAN module                     | FreeBSD pkg                | Debian pkg                     |
+|---------------------------------|----------------------------|--------------------------------|
+| App::Cmd                        | p5-App-Cmd                 | libapp-cmd-perl                |
+| DBI                             | p5-DBI                     | libdbi-perl                    |
+| DBD::Pg                         | p5-DBD-Pg                  | libdbd-pg-perl                 |
+| DBIx::Class                     | p5-DBIx-Class              | libdbix-class-perl             |
+| DBIx::Class::Migration          | p5-DBIx-Class-Migration    | libdbix-class-migration-perl   |
+| Ereshkigal                      | *(CPAN)*                   | *(CPAN)*                       |
+| File::ShareDir                  | p5-File-ShareDir           | libfile-sharedir-perl          |
+| File::ShareDir::Install         | p5-File-ShareDir-Install   | libfile-sharedir-install-perl  |
+| File::Slurp                     | p5-File-Slurp              | libfile-slurp-perl             |
+| Hash::Merge                     | p5-Hash-Merge              | libhash-merge-perl             |
+| JSON::MaybeXS                   | p5-JSON-MaybeXS            | libjson-maybexs-perl           |
+| JSON::XS                        | p5-JSON-XS                 | libjson-xs-perl                |
+| Log::Munger                     | *(CPAN)*                   | *(CPAN)*                       |
+| Net::Server                     | p5-Net-Server              | libnet-server-perl             |
+| POE                             | p5-POE                     | libpoe-perl                    |
+| POE::Component::Server::JSONUnix | *(CPAN)*                  | *(CPAN)*                       |
+| YAML::XS                        | p5-YAML-LibYAML            | libyaml-libyaml-perl           |
 
-`Log::Munger` powers log enrichment; `IP::Geolocation::MMDB` is an
-additional optional dependency, needed only when `munger_geoip` is set.
+A few of these earn a word:
+
+- Log::Munger :: Powers log enrichment, and the HTTP ingest paths will
+  not run without it.
+- Ereshkigal :: Provides the client the `status` and `stop` commands use
+  to reach the running manager.
+- Net::Server :: Wanted for `Net::Server::Daemonize`, which daemonizes
+  the manager and the workers.
+- IP::Geolocation::MMDB :: Optional, and needed only when `munger_geoip`
+  is set.
 
 Package names are current as of writing. Anything missing from your
 release installs cleanly from CPAN via
@@ -42,9 +58,10 @@ make install
 
 ```shell
 pkg install p5-App-cpanminus p5-App-Cmd p5-DBI p5-DBD-Pg \
-    p5-DBIx-Class p5-DBIx-Class-Migration p5-File-Slurp p5-Hash-Merge \
-    p5-JSON-XS p5-YAML-LibYAML
-cpanm Log::Munger
+    p5-DBIx-Class p5-DBIx-Class-Migration p5-File-Slurp \
+    p5-File-ShareDir p5-File-ShareDir-Install p5-Hash-Merge \
+    p5-JSON-XS p5-JSON-MaybeXS p5-Net-Server p5-POE p5-YAML-LibYAML
+cpanm Log::Munger Ereshkigal POE::Component::Server::JSONUnix
 ```
 
 ...then install Allani itself from source as above.
@@ -54,8 +71,10 @@ cpanm Log::Munger
 ```shell
 apt-get install cpanminus libapp-cmd-perl libdbi-perl libdbd-pg-perl \
     libdbix-class-perl libdbix-class-migration-perl libfile-slurp-perl \
-    libhash-merge-perl libjson-xs-perl libyaml-libyaml-perl
-cpanm Log::Munger
+    libfile-sharedir-perl libfile-sharedir-install-perl \
+    libhash-merge-perl libjson-xs-perl libjson-maybexs-perl \
+    libnet-server-perl libpoe-perl libyaml-libyaml-perl
+cpanm Log::Munger Ereshkigal POE::Component::Server::JSONUnix
 ```
 
 ...then install Allani itself from source as above.

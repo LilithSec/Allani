@@ -125,9 +125,34 @@ sub ingest_json_syslog {
 	return 1;
 } ## end sub ingest_json_syslog
 
-# Decode + validate + enrich one raw JSON line into the ordered bind values for
-# a syslog row. Dies on a malformed line or missing required field. Shared by
-# the immediate insert (ingest_json_syslog) and the batched path (queue).
+# Turns one raw JSON line from syslog-ng into the ordered bind values for a
+# syslog row: decode it, check the required fields are present, run it through
+# the munger when one is configured, and lay the values out in the order the
+# INSERT expects. Shared by both write paths -- the immediate insert
+# (ingest_json_syslog) and the batched one (queue) -- so a row is built
+# identically either way.
+#
+#   - $raw_json :: One line of JSON as syslog-ng's format-json template emits
+#       it, decoding to a hash whose keys are the syslog-ng macro names. The
+#       fields C_ISODATE, R_ISODATE, S_ISODATE, FACILITY, HOST, HOST_FROM,
+#       PRIORITY, PROGRAM, and SOURCEIP must be present; PID and MESSAGE are
+#       optional, though enrichment has nothing to match without MESSAGE. A
+#       trailing newline is fine.
+#
+# Returns an array ref of eleven bind values, in the column order
+# (c_isodate, r_isodate, s_isodate, facility, host, host_from, pid, priority,
+# program, sourceip, raw). All but pid and raw are the decoded values verbatim;
+# pid is passed through _clean_pid, so it is either a plain integer or undef;
+# raw is a JSON string, either the line exactly as received or, when enrichment
+# matched, the record re-encoded with the extracted fields added under the
+# "enriched" key.
+#
+# Dies when the line will not decode, decodes to something other than a hash, or
+# is missing a required field. Enrichment never dies: a munger failure or a
+# non-match just leaves raw as the line that arrived.
+#
+#     my $row = $self->_build_row('{"HOST":"web01","PROGRAM":"sshd",...}');
+#     $self->{'sth'}->execute( @{$row} );
 sub _build_row {
 	my ( $self, $raw_json ) = @_;
 
@@ -171,13 +196,27 @@ sub _build_row {
 	];
 } ## end sub _build_row
 
-# The pid column is a bigint, but the bracketed value syslog-ng parses as PID is
-# not always a process id. FreeBSD kernel lines look like
+# Makes a syslog-ng PID value safe to bind to the pid column.
+#
+# The column is a bigint, but the bracketed value syslog-ng parses as PID is not
+# always a process id. FreeBSD kernel lines look like
 # "kernel[6558585.501484]: ..." where the brackets hold the boot timestamp
-# (seconds.microseconds), so PID arrives as "6558585.501484" and the bigint
-# bind is rejected, taking the whole INSERT (or, in batch mode, the whole chunk)
-# down with it. Coerce anything that is not a plain non-negative integer within
-# bigint range to undef/NULL; the untouched original still lives in the raw JSON.
+# (seconds.microseconds), so PID arrives as "6558585.501484" and the bigint bind
+# is rejected, taking the whole INSERT -- or, in batch mode, the whole chunk --
+# down with it. Anything that is not a plain non-negative integer within bigint
+# range therefore becomes NULL. Nothing is lost by doing so: the untouched
+# original still lives in the raw JSON.
+#
+#   - $pid :: The PID field as it came out of the decoded record, so a string, a
+#       number, or undef when syslog-ng sent no PID. Not a method argument --
+#       this is a plain function.
+#
+# Returns the value unchanged when it is a string of digits no larger than
+# 9223372036854775807, and undef otherwise, which DBI binds as SQL NULL.
+#
+#     _clean_pid('4242');             # 4242
+#     _clean_pid('6558585.501484');   # undef -- a FreeBSD kernel timestamp
+#     _clean_pid(undef);              # undef
 sub _clean_pid {
 	my ($pid) = @_;
 
@@ -256,4 +295,4 @@ sub flush {
 	return $written;
 } ## end sub flush
 
-1;    # End of Allani
+1;    # End of Allani::Ingest

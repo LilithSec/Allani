@@ -77,8 +77,32 @@ sub new {
 	return $self;
 } ## end sub new
 
-# work out the worker list: one per web_logs set (keyed web-<set>), plus one
-# syslog worker when a syslog_socket is configured
+# Works out which workers this manager is responsible for, reading the loaded
+# config. Called once from new, before anything is spawned, so that start_server
+# has the full list up front and can report it.
+#
+# One worker is planned per web_logs set, plus a single syslog worker when a
+# syslog_socket is configured. The reserved keys under web_logs -- geoip,
+# state_dir, pid_dir, run_dir -- are settings rather than sets and are skipped,
+# as is any key whose value is not a hash.
+#
+# Takes no arguments.
+#
+# Returns nothing. It populates $self->{'workers'}, a hash keyed by worker name
+# -- 'web-<set>' for a web_logs set, 'syslog' for the syslog worker -- whose
+# values are hash refs of:
+#
+#   - args :: An array ref of the ishara arguments identifying this worker, e.g.
+#       [ '--name', 'foo' ] or [ '--syslog' ]. _poe_spawn appends --config and
+#       --foreground to these.
+#
+#   - restarts :: How many times the worker has been restarted, starting at 0.
+#
+#   - delay :: Seconds to wait before the next restart, starting at 0 and backed
+#       off by _poe_reaped.
+#
+# Given a config with web_logs sets 'foo' and 'bar' and a syslog_socket set,
+# this plans the workers web-bar, web-foo, and syslog.
 sub _plan_workers {
 	my ($self) = @_;
 
@@ -189,6 +213,19 @@ sub start_server {
 	return 1;
 } ## end sub start_server
 
+# The POE _start handler for the manager session, run once when the session is
+# created. It names the session 'allani_manager' so the control socket handlers
+# can post to it by alias rather than by ID, then queues a spawn for every
+# planned worker.
+#
+# The workers are yielded rather than spawned inline so that _start returns
+# promptly and the kernel is running by the time the first child appears.
+#
+#   - $kernel :: The POE kernel, from the KERNEL argument slot.
+#
+# Returns nothing.
+#
+# Not called directly; POE dispatches it when start_server creates the session.
 sub _poe_start {
 	my ( $self, $kernel ) = @_[ OBJECT, KERNEL ];
 
@@ -200,7 +237,30 @@ sub _poe_start {
 	return;
 } ## end sub _poe_start
 
-# spawn one ishara worker in the foreground under a Wheel::Run
+# Spawns one ishara worker under a POE::Wheel::Run and records what is needed to
+# recognise it again later. The worker is always run with --foreground: the
+# manager is its supervisor, so it must not daemonize away from the wheel
+# watching it.
+#
+# Handles the 'spawn_worker' event, which is fired both by _poe_start at
+# startup and by _poe_reaped after a backoff delay, so this is the single place
+# a worker is ever started.
+#
+#   - $kernel :: The POE kernel, from the KERNEL argument slot.
+#
+#   - $name :: The worker name, from ARG0, matching a key in $self->{'workers'},
+#       e.g. 'web-foo' or 'syslog'. An unknown name is ignored.
+#
+# Returns nothing. It stores the wheel and its PID on the worker's entry and
+# records the reverse lookups -- wheel ID to name, PID to name -- that
+# _poe_stdout, _poe_stderr, and _poe_reaped use to attribute output and exits.
+# The child is registered for reaping via sig_child, and the spawn is logged to
+# syslog with the full command line.
+#
+# Not called directly; POE dispatches it. The effect for a web set named foo is
+# to run:
+#
+#     ishara --name foo --config /usr/local/etc/allani.yaml --foreground
 sub _poe_spawn {
 	my ( $self, $kernel, $name ) = @_[ OBJECT, KERNEL, ARG0 ];
 
@@ -226,7 +286,22 @@ sub _poe_spawn {
 	return;
 } ## end sub _poe_spawn
 
-# a worker's stdout/stderr are captured here and logged by the manager
+# Logs one line a worker wrote to stdout. A supervised worker has nowhere useful
+# to print to, so the manager captures its output and forwards it to syslog
+# instead, tagged with the worker's name so lines stay attributable.
+#
+#   - $line :: One line of the worker's stdout, from ARG0, already stripped of
+#       its newline by the wheel.
+#
+#   - $wheel_id :: The ID of the wheel that produced it, from ARG1, looked up in
+#       $self->{'wheel_to_worker'} to name the worker. A wheel that has already
+#       been forgotten logs as '?' rather than being dropped.
+#
+# Returns nothing. The line reaches syslog at the info level as, for example:
+#
+#     ishara "web-foo" stdout... tailing /var/log/apache2/foo/access.log
+#
+# Not called directly; POE dispatches it.
 sub _poe_stdout {
 	my ( $self, $line, $wheel_id ) = @_[ OBJECT, ARG0, ARG1 ];
 	my $name = defined( $self->{'wheel_to_worker'}{$wheel_id} ) ? $self->{'wheel_to_worker'}{$wheel_id} : '?';
@@ -234,6 +309,22 @@ sub _poe_stdout {
 	return;
 }
 
+# Logs one line a worker wrote to stderr. The counterpart to _poe_stdout,
+# differing only in that it logs at the err level, since this is where a
+# worker's warnings and die messages surface.
+#
+#   - $line :: One line of the worker's stderr, from ARG0, already stripped of
+#       its newline by the wheel.
+#
+#   - $wheel_id :: The ID of the wheel that produced it, from ARG1, looked up in
+#       $self->{'wheel_to_worker'} to name the worker; an unknown wheel logs
+#       as '?'.
+#
+# Returns nothing. The line reaches syslog at the err level as, for example:
+#
+#     ishara "web-foo" stderr... tail read error on "/var/log/httpd/access.log"
+#
+# Not called directly; POE dispatches it.
 sub _poe_stderr {
 	my ( $self, $line, $wheel_id ) = @_[ OBJECT, ARG0, ARG1 ];
 	my $name = defined( $self->{'wheel_to_worker'}{$wheel_id} ) ? $self->{'wheel_to_worker'}{$wheel_id} : '?';
@@ -241,7 +332,33 @@ sub _poe_stderr {
 	return;
 }
 
-# reap a dead worker; restart it (exponential backoff) unless we are stopping
+# Reaps a worker that has exited and, unless the manager is shutting down,
+# arranges for it to be restarted. This is what makes the manager a supervisor:
+# a worker that dies for any reason -- a crash, a lost database connection, an
+# operator killing it -- comes back on its own.
+#
+# Restarts back off exponentially, doubling from one second and capping at
+# sixty, so a worker that cannot start at all (a bad config, a database that is
+# down) settles into retrying once a minute rather than spinning. The delay is
+# never reset, so it reflects the whole life of the manager rather than the last
+# failure alone.
+#
+# Handles the sig_child event registered by _poe_spawn.
+#
+#   - $kernel :: The POE kernel, from the KERNEL argument slot.
+#
+#   - $pid :: The PID that exited, from ARG1, looked up in
+#       $self->{'pid_to_worker'}. A PID the manager does not know is ignored.
+#
+#   - $status :: The raw wait status, from ARG2. Shifted right eight places for
+#       the exit code when logging.
+#
+# Returns nothing. It forgets the dead worker's wheel and PID, logs the exit,
+# and then either stops -- when $self->{'shutting_down'} is set, because
+# _poe_stop_all asked the worker to exit -- or bumps the worker's restart count
+# and delay and schedules a fresh 'spawn_worker' for it.
+#
+# Not called directly; POE dispatches it when a child is reaped.
 sub _poe_reaped {
 	my ( $self, $kernel, $pid, $status ) = @_[ OBJECT, KERNEL, ARG1, ARG2 ];
 
@@ -265,8 +382,27 @@ sub _poe_reaped {
 	return;
 } ## end sub _poe_reaped
 
-# TERM every worker (ishara traps it and shuts down cleanly), then release the
-# manager so the kernel can wind down
+# Begins an orderly shutdown: asks every running worker to stop, then releases
+# the manager's own hold on the kernel so it can wind down once the workers are
+# gone.
+#
+# Workers are sent TERM rather than killed, because ishara traps it and uses it
+# to checkpoint -- flushing buffered rows and writing its position tablet -- so
+# that a restart resumes exactly where it left off. The shutting_down flag is
+# set first so that _poe_reaped lets the workers stay dead instead of restarting
+# them as it normally would.
+#
+# Handles the 'stop_all' event, which the control socket's stop command posts.
+#
+#   - $kernel :: The POE kernel, from the KERNEL argument slot.
+#
+# Returns nothing. Every worker with a live wheel is TERMed and the stop logged
+# per worker; the pending restart timers are cleared and the 'allani_manager'
+# alias dropped, which is what lets the kernel finish. The socket's stop handler
+# separately schedules the final shutdown a second later, giving this a moment
+# to run first.
+#
+# Not called directly; POE dispatches it.
 sub _poe_stop_all {
 	my ( $self, $kernel ) = @_[ OBJECT, KERNEL ];
 
@@ -285,7 +421,35 @@ sub _poe_stop_all {
 	return;
 } ## end sub _poe_stop_all
 
-# the control-socket status response
+# Builds the reply to a status request on the control socket -- what
+# `allani status` prints.
+#
+# Takes no arguments.
+#
+# Returns a hash ref, which the socket server encodes as JSON:
+#
+#   - uptime :: Seconds since start_server began, or undef when the manager has
+#       somehow not started yet.
+#
+#   - workers :: A hash ref keyed by worker name, e.g. 'web-foo' or 'syslog',
+#       each value a hash ref of:
+#
+#       - up :: 1 when the worker currently has a PID, 0 when it is between
+#           restarts or has not been spawned.
+#
+#       - pid :: The worker's PID, or undef when it is not running.
+#
+#       - restarts :: How many times it has been restarted since the manager
+#           started. A number climbing here is the sign of a worker that cannot
+#           stay up.
+#
+# So a healthy manager with one web worker and one syslog worker answers:
+#
+#     { 'uptime' => 3600,
+#       'workers' => {
+#           'web-foo' => { 'up' => 1, 'pid' => 4242, 'restarts' => 0 },
+#           'syslog'  => { 'up' => 1, 'pid' => 4243, 'restarts' => 0 },
+#       } }
 sub _cmd_status {
 	my ($self) = @_;
 
@@ -304,19 +468,5 @@ sub _cmd_status {
 		'workers' => \%workers,
 	};
 } ## end sub _cmd_status
-
-=head1 AUTHOR
-
-Zane C. Bowers-Hadley, C<< <vvelox at vvelox.net> >>
-
-=head1 LICENSE AND COPYRIGHT
-
-This software is Copyright (c) 2026 by Zane C. Bowers-Hadley.
-
-This is free software, licensed under:
-
-  The GNU General Public License, Version 2, June 1991
-
-=cut
 
 1;

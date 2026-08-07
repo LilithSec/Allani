@@ -142,7 +142,22 @@ sub ingest_line {
 	return 1;
 } ## end sub ingest_line
 
-# a status/bytes value: '-' or non-numeric becomes undef (NULL), else the number
+# Makes a parsed status or bytes value safe to bind to an integer column. Access
+# logs write '-' where a field does not apply -- a 304 has no body, so bytes is
+# '-' rather than 0 -- and a truncated or unusual line can leave the munger with
+# something that is not a number at all. Either would be rejected by the integer
+# bind and take the whole INSERT down, so both become NULL instead.
+#
+#   - $value :: The field as the munger extracted it, so a string of digits,
+#       '-', '', or undef when the pattern did not capture it. Not a method
+#       argument -- this is a plain function.
+#
+# Returns the value as a number when it is a string of digits, and undef
+# otherwise, which DBI binds as SQL NULL.
+#
+#     _num('4523');   # 4523
+#     _num('-');      # undef -- no body, as on a 304
+#     _num(undef);    # undef
 sub _num {
 	my ($value) = @_;
 	return undef if ( !defined($value) || $value eq '' || $value eq '-' );
@@ -150,8 +165,25 @@ sub _num {
 	return $value + 0;
 }
 
-# turn an Apache timestamp (10/Oct/2000:13:55:36 -0700) into an ISO 8601 string
-# PostgreSQL parses natively as timestamptz. Returns undef on anything unexpected.
+# Turns an Apache access log timestamp into an ISO 8601 string that PostgreSQL
+# parses natively as a timestamptz. The log format is its own thing -- a day
+# number, an English month abbreviation, and a timezone offset written without a
+# colon -- so it is rearranged rather than parsed into an epoch, which keeps the
+# offset the server actually logged instead of shifting the value into local
+# time.
+#
+#   - $str :: An Apache/nginx access log timestamp as the munger captured it,
+#       i.e. DD/Mon/YYYY:HH:MM:SS +ZZZZ, such as '10/Oct/2000:13:55:36 -0700'.
+#       Undef when the line did not parse. Not a method argument -- this is a
+#       plain function.
+#
+# Returns the same moment as an ISO 8601 string, YYYY-MM-DDTHH:MM:SS+ZZ:ZZ, or
+# undef for undef input, an unrecognised layout, or an unknown month
+# abbreviation. Undef binds as SQL NULL, leaving req_isodate empty for that row;
+# r_isodate still records when the line was received.
+#
+#     _apache_time('10/Oct/2000:13:55:36 -0700');   # '2000-10-10T13:55:36-07:00'
+#     _apache_time('sometime last tuesday');        # undef
 sub _apache_time {
 	my ($str) = @_;
 
@@ -164,19 +196,5 @@ sub _apache_time {
 
 	return undef;
 } ## end sub _apache_time
-
-=head1 AUTHOR
-
-Zane C. Bowers-Hadley, C<< <vvelox at vvelox.net> >>
-
-=head1 LICENSE AND COPYRIGHT
-
-This software is Copyright (c) 2026 by Zane C. Bowers-Hadley.
-
-This is free software, licensed under:
-
-  The GNU General Public License, Version 2, June 1991
-
-=cut
 
 1;

@@ -138,7 +138,20 @@ sub ingest_line {
 	return 1;
 } ## end sub ingest_line
 
-# an integer value: undef/non-numeric becomes undef (NULL), else the number
+# Makes a parsed value safe to bind to an integer column -- here the pid an
+# error line reports. A truncated or unusual line can leave the munger with
+# something that is not a number, which the integer bind would reject, taking
+# the whole INSERT down; such a value becomes NULL instead.
+#
+#   - $value :: The field as the munger extracted it, so a string of digits,
+#       '-', '', or undef when the pattern did not capture it. Not a method
+#       argument -- this is a plain function.
+#
+# Returns the value as a number when it is a string of digits, and undef
+# otherwise, which DBI binds as SQL NULL.
+#
+#     _num('62131');   # 62131
+#     _num(undef);     # undef
 sub _num {
 	my ($value) = @_;
 	return undef if ( !defined($value) || $value eq '' || $value eq '-' );
@@ -146,11 +159,30 @@ sub _num {
 	return $value + 0;
 }
 
-# turn an error-log timestamp into an ISO 8601 string PostgreSQL parses as a
-# timestamp. Handles nginx (2000/10/11 14:32:52) and Apache 2.2/2.4
-# (Wed Oct 11 14:32:52[.ffffff] 2000). These carry no timezone, so the value is
-# interpreted in the server's timezone; r_isodate is the reliable receipt time.
-# Returns undef on anything unexpected.
+# Turns an error log timestamp into an ISO 8601 string PostgreSQL parses as a
+# timestamp. Unlike the access log, the two servers disagree on the format, so
+# both are handled: nginx writes YYYY/MM/DD HH:MM:SS, and Apache 2.2/2.4 write a
+# ctime-ish string with the year at the end and, on 2.4, microseconds.
+#
+# Neither carries a timezone, so the stored value is interpreted in the
+# database server's timezone. That makes err_isodate approximate whenever the
+# web server and the database disagree about local time; r_isodate is the
+# reliable receipt time.
+#
+#   - $str :: An error log timestamp as the munger captured it, in either
+#       '2000/10/11 14:32:52' (nginx) or 'Wed Oct 11 14:32:52 2000' /
+#       'Wed Oct 11 14:32:52.123456 2000' (Apache) form. Undef when the line did
+#       not parse. Not a method argument -- this is a plain function.
+#
+# Returns the same moment as an ISO 8601 string, YYYY-MM-DDTHH:MM:SS, with
+# fractional seconds kept when Apache logged them and no timezone suffix. Returns
+# undef for undef input, an unrecognised layout, or an unknown month
+# abbreviation; undef binds as SQL NULL, leaving err_isodate empty for that row.
+#
+#     _err_time('2000/10/11 14:32:52');              # '2000-10-11T14:32:52'
+#     _err_time('Wed Oct 11 14:32:52 2000');         # '2000-10-11T14:32:52'
+#     _err_time('Wed Oct 11 14:32:52.123456 2000');  # '2000-10-11T14:32:52.123456'
+#     _err_time('nonsense');                         # undef
 sub _err_time {
 	my ($str) = @_;
 
@@ -172,19 +204,5 @@ sub _err_time {
 
 	return undef;
 } ## end sub _err_time
-
-=head1 AUTHOR
-
-Zane C. Bowers-Hadley, C<< <vvelox at vvelox.net> >>
-
-=head1 LICENSE AND COPYRIGHT
-
-This software is Copyright (c) 2026 by Zane C. Bowers-Hadley.
-
-This is free software, licensed under:
-
-  The GNU General Public License, Version 2, June 1991
-
-=cut
 
 1;

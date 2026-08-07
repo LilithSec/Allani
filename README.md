@@ -64,6 +64,53 @@ with optional Log::Munger enrichment. Planned, in keeping with her song:
 - `release` — retention pruning, after the *Song of Release* that is
   her great song: even Allani does not hold the dead forever
 
+## Install
+
+Allani needs PostgreSQL and a Perl with the modules declared in
+`Makefile.PL`. Full detail, including preparing the database and the
+role, is in [docs/install.md](docs/install.md).
+
+### From source
+
+From a checkout or an unpacked release tarball...
+
+```shell
+cpanm --installdeps .
+perl Makefile.PL
+make
+make test
+make install
+```
+
+### FreeBSD
+
+```shell
+pkg install p5-App-cpanminus p5-App-Cmd p5-DBI p5-DBD-Pg \
+    p5-DBIx-Class p5-DBIx-Class-Migration p5-File-Slurp \
+    p5-File-ShareDir p5-File-ShareDir-Install p5-Hash-Merge \
+    p5-JSON-XS p5-JSON-MaybeXS p5-Net-Server p5-POE p5-YAML-LibYAML
+cpanm Log::Munger Ereshkigal POE::Component::Server::JSONUnix
+```
+
+...then install Allani itself from source as above.
+
+### Debian
+
+```shell
+apt-get install cpanminus libapp-cmd-perl libdbi-perl libdbd-pg-perl \
+    libdbix-class-perl libdbix-class-migration-perl libfile-slurp-perl \
+    libfile-sharedir-perl libfile-sharedir-install-perl \
+    libhash-merge-perl libjson-xs-perl libjson-maybexs-perl \
+    libnet-server-perl libpoe-perl libyaml-libyaml-perl
+cpanm Log::Munger Ereshkigal POE::Component::Server::JSONUnix
+```
+
+...then install Allani itself from source as above.
+
+`IP::Geolocation::MMDB` is optional and only needed when `munger_geoip`
+is set. Package names are current as of writing; anything missing from
+your release installs cleanly from CPAN.
+
 ## Documentation
 
 - [docs/index.md](docs/index.md) :: where to start

@@ -12,7 +12,7 @@ use Log::Munger ();
 
 =head1 NAME
 
-Allani - The great new Allani!
+Allani - A syslog store; syslog-ng JSON laid to rest in PostgreSQL.
 
 =head1 VERSION
 
@@ -24,30 +24,43 @@ our $VERSION = '0.0.1';
 
 =head1 SYNOPSIS
 
-Quick summary of what the module does.
-
-Perhaps a little code snippet.
+Allani is an L<App::Cmd> application. C<src_bin/allani> is little more than
+this:
 
     use Allani;
+    Allani->run;
 
-    my $foo = Allani->new();
-    ...
+The class is also usable directly, which is what the commands and the
+L<Allani::Ishara> workers do:
 
-=head1 EXPORT
+    my $allani = Allani->new;
+    $allani->read_in_config( 'config' => '/usr/local/etc/allani.yaml' );
 
-A list of functions that can be exported.  You can delete this section
-if you don't export anything, such as for a purely object-oriented module.
+    my $dbh    = $allani->connect_dbi;
+    my $munger = $allani->build_munger;
+
+=head1 DESCRIPTION
+
+Allani holds the pieces every command and worker needs: the config, the
+database handle, and the L<Log::Munger> enricher built from that config. Each
+subcommand lives in its own module under L<Allani::Command>, and the ingest
+paths live in L<Allani::Ingest> and its subclasses.
 
 =head1 METHODS
 
 =head2 connect_dbi
 
-Connects via the L<DBI> and returns a DBH.
+Connects via L<DBI> and returns a database handle, using the C<dsn>, C<user>,
+and C<pass> from the loaded config. The handle comes from
+C<connect_cached>, so repeated calls in one process share a connection.
 
-Unless your a plan to use the defaults, read_in_config should
-be called first.
+Takes no arguments. Dies when the config has not been loaded yet or when the
+connection fails; the password is never included in the error, only whether
+one was set.
 
-    my $dbh=$allani->connect_dbi;
+Unless you plan to use the defaults, read_in_config should be called first.
+
+    my $dbh = $allani->connect_dbi;
 
 
 =cut
@@ -231,19 +244,29 @@ sub duration_to_interval {
 	die( '"' . $str . '" is not a valid duration (e.g. 90d, 24h, 30m, 60s, 2w, or a plain number of days)' );
 } ## end sub duration_to_interval
 
-=head1 read_in_config
+=head2 read_in_config
 
-Reads in the specified config.
+Reads the config file, merges it over the built-in defaults, and stores the
+result for L</config> and the rest of the class to use. Returns 1.
 
-If none is specified, then the default, /usr/local/etc/allani.yaml, is
-used. If that does not exist, the default settings are used.
+    - config :: Path to the YAML config to read.
+        default :: /usr/local/etc/allani.yaml
+
+A missing config file is only an error when it is not the default one -- the
+defaults alone (database C<allani>, user C<allani>, local socket) are a
+usable configuration.
 
     $allani->read_in_config;
+    $allani->read_in_config( 'config' => '/usr/local/etc/allani.yaml' );
 
 =cut
 
 sub read_in_config {
 	my ( $self, %opts ) = @_;
+
+	if ( !defined( $opts{'config'} ) ) {
+		$opts{'config'} = '/usr/local/etc/allani.yaml';
+	}
 
 	my $base_config = {
 		'user' => 'allani',
@@ -294,6 +317,30 @@ sub read_in_config {
 	return 1;
 } ## end sub read_in_config
 
+# The App::Cmd hook naming the options accepted before the subcommand name,
+# i.e. the ones that apply to every command rather than to one of them. App::Cmd
+# calls it while preparing a command and files the parsed values under
+# $app->{'global_options'}, which is where each command's execute reads --config
+# from.
+#
+# Takes no arguments beyond the invocant App::Cmd passes.
+#
+# Returns a list of Getopt::Long::Descriptive option specs -- one array ref per
+# option, holding the spec string, the help text, and optionally a hash ref of
+# attributes. The options are:
+#
+#   - help|h :: Print the usage screen.
+#
+#   - version|v :: Print the version.
+#
+#   - config=s :: Path to the config file, defaulting to
+#       /usr/local/etc/allani.yaml. The default is applied here rather than in
+#       read_in_config so --help shows it.
+#
+# Not called directly; App::Cmd invokes it. The values it produces are read like
+# this, as every command's execute does:
+#
+#     $self->{'app'}->read_in_config( 'config' => $self->{'app'}{'global_options'}{'config'} );
 sub global_opt_spec {
 	return (
 		[ 'help|h'    => "This usage screen." ],
@@ -343,10 +390,6 @@ L<https://cpanratings.perl.org/d/Allani>
 L<https://metacpan.org/release/Allani>
 
 =back
-
-
-=head1 ACKNOWLEDGEMENTS
-
 
 =head1 LICENSE AND COPYRIGHT
 

@@ -84,18 +84,4 @@ sub log_drek {
 	return;
 } ## end sub log_drek
 
-=head1 AUTHOR
-
-Zane C. Bowers-Hadley, C<< <vvelox at vvelox.net> >>
-
-=head1 LICENSE AND COPYRIGHT
-
-This software is Copyright (c) 2026 by Zane C. Bowers-Hadley.
-
-This is free software, licensed under:
-
-  The GNU General Public License, Version 2, June 1991
-
-=cut
-
 1;
