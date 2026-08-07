@@ -35,7 +35,7 @@ allani help <command>
 | `tail`            | show the most recent rows, optionally following new ones            |
 | `stats`           | count rows grouped by a field                                       |
 | `prune`           | delete rows older than a given age (retention)                      |
-| `index`           | create the per-enriched-field indexes named in the config           |
+| `index`           | manage the per-enriched-field indexes (list/add/drop/sync/import)   |
 | `start`           | start the manager and its ishara workers                            |
 | `stop`            | stop the running manager and its workers                            |
 | `status`          | show the manager and workers status                                 |
@@ -284,7 +284,9 @@ composites, the timestamp btrees — as well as any hand-made index, can never b
 dropped. Those defaults are shipped by the schema migrations and applied by
 `deploy`/`migrate`.
 
-# The manager — start / stop / status
+## The manager
+
+`start`, `stop`, and `status` are the three commands that drive it.
 
 For a running deployment, `allani start` launches a **manager** that spawns and
 supervises the `ishara` workers: one per `web_logs` set, plus one syslog worker
@@ -305,7 +307,7 @@ config; workers log under `ishara-<name>`. See
 [configuration](configuration.md#the-manager-run_dir-syslog_socket) for
 `run_dir`, `syslog_socket`, and `ishara_bin`.
 
-# ishara — the worker
+## ishara
 
 `ishara` is the worker daemon the manager spawns; it can also be run directly.
 In **web mode** it tails the Apache/nginx logs named by a `web_logs` set and

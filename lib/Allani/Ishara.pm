@@ -50,10 +50,11 @@ pattern) so a restart resumes exactly where it left off.
         geoip:  /path/to/other.mmdb # optional per-set override
 
 C<geoip>, C<state_dir>, and C<pid_dir> are reserved keys under C<web_logs>;
-every other key is a set. When a set has no explicit C<vhost>, the wildcard
-portion of each matched filename becomes the vhost, and a C<:> in it splits
-off the port (e.g. a C<*> matching C<www.example.com:443> => vhost
-C<www.example.com>, port 443).
+every other key is a set. C<pid_dir> is reserved but not currently read --
+PID files go under the top-level C<run_dir>. When a set has no explicit
+C<vhost>, the wildcard portion of each matched filename becomes the vhost,
+and a C<:> in it splits off the port (e.g. a C<*> matching
+C<www.example.com:443> => vhost C<www.example.com>, port 443).
 
 =head1 METHODS
 

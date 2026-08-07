@@ -3,9 +3,14 @@
 The config file is YAML, default `/usr/local/etc/allani.yaml`. Any
 command takes another via `allani --config <file> <command>`.
 
-It is small — the database connection plus optional enrichment. Settings
-given in the file are merged over the defaults, so only what differs needs
-to be present.
+Settings given in the file are merged over the defaults, so only what
+differs needs to be present — and for a local database with no
+enrichment, nothing does.
+
+The keys below are the core of it: the connection, plus optional
+enrichment. The sections that follow cover the rest, each of which only
+matters if you use the feature it belongs to — per-field search indexes,
+the manager, and the web logs to follow.
 
 | key            | default                | description                                                                                                    |
 |----------------|------------------------|----------------------------------------------------------------------------------------------------------------|
@@ -57,8 +62,12 @@ Notes:
 
 The schema migrations already ship the default indexes — the GIN index on
 `raw` (for `--field key=value`), composite `(column, id)` btrees for the
-convenience columns, and timestamp btrees for `--since`/`prune`. Those cover
-the everyday searches.
+convenience columns, timestamp btrees for `--since`/`prune`, paired
+`(dimension, r_isodate)` btrees for a filter and a time window used
+together, and covering indexes so `stats` over a window can be answered
+from the index alone. They also tune autovacuum for tables that only ever
+grow. Those cover the everyday searches — see
+[architecture](architecture.md#indexes-and-autovacuum).
 
 Non-equality `--field` operators (`>`, `<`, `~`, `=~`, ...) extract a single
 enriched field and can't use the `raw` GIN index, so searching a large table by
@@ -122,7 +131,6 @@ munger_rules:
 web_logs:
   geoip: /usr/local/share/GeoIP/GeoLite2-City.mmdb   # global default (reserved)
   state_dir: /var/db/allani                          # position tablets (reserved)
-  pid_dir: /var/run                                  # PID files (reserved)
 
   # a set named "apache"
   apache:
@@ -144,7 +152,9 @@ Notes:
 
 - `geoip`, `state_dir`, and `pid_dir` are **reserved keys** — a set cannot
   use those names. `geoip` here is the global default; a set may override it
-  with its own `geoip`, and geoip applies to the parsed client IP.
+  with its own `geoip`, and geoip applies to the parsed client IP. `pid_dir`
+  is reserved but not currently read: worker PID files go under the top-level
+  `run_dir` alongside the manager's.
 - `access` / `error` are globs. A set with no explicit `vhost` derives the
   vhost from the wildcard portion of each matched filename (with a `:`
   splitting off `vhost_port`); set `vhost`/`vhost_port` explicitly to tag all

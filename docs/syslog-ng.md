@@ -79,12 +79,13 @@ operators. Adding a field is editing the template and reloading syslog-ng;
 no schema change on Allani's side.
 
 `MESSAGE` is optional for a bare store-everything deployment, but
-**required for enrichment**: with `munger_rules` set (see
+**required for enrichment**. With `munger_rules` set (see
 [configuration](configuration.md)) each record is run through
 [Log::Munger](https://metacpan.org/pod/Log::Munger), whose rules gate on
-`PROGRAM` and match against `MESSAGE`. Without `MESSAGE` in the record there
-is nothing to extract from, and the extracted fields it does produce are
-merged back into `raw` under the `enriched` key.
+`PROGRAM` and match against `MESSAGE`; whatever they extract is merged
+back into `raw` under the `enriched` key. Leave `MESSAGE` out of the
+template and there is nothing for them to match against, so nothing is
+ever extracted.
 
 ## Notes
 
